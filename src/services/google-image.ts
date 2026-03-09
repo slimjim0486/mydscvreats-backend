@@ -18,13 +18,127 @@ function getGoogleApiKey() {
   return env.GEMINI_API_KEY ?? env.GOOGLE_API_KEY ?? env.NANOBANANA_API_KEY;
 }
 
-function buildPrompt(input: { name: string; description?: string | null }) {
+function normalize(value?: string | null) {
+  return value?.trim().toLowerCase() ?? "";
+}
+
+function inferAngle(input: {
+  name: string;
+  description?: string | null;
+  sectionName?: string | null;
+}) {
+  const haystack = [input.name, input.description, input.sectionName]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  if (
+    /(pizza|flatbread|salad|bowl|mezze|platter|sushi|maki|nigiri|biryani|rice bowl|poke)/.test(
+      haystack
+    )
+  ) {
+    return "overhead or high 30-45 degree angle that shows the full plating clearly";
+  }
+
+  if (
+    /(burger|sandwich|toast|pancake|cake|slice|lasagna|stack|shawarma|wrap|club)/.test(
+      haystack
+    )
+  ) {
+    return "45 degree three-quarter angle, slightly low if needed to show layers and height";
+  }
+
+  if (/(coffee|tea|latte|juice|smoothie|cocktail|mocktail|drink)/.test(haystack)) {
+    return "side or 45 degree angle that emphasizes the glass shape and drink texture";
+  }
+
+  if (/(soup|ramen|noodles|curry|stew|pasta)/.test(haystack)) {
+    return "45 degree angle that shows depth, sauce texture, and steam if appropriate";
+  }
+
+  return "45 degree three-quarter angle, the standard commercial food angle";
+}
+
+function inferLighting(input: {
+  name: string;
+  description?: string | null;
+  sectionName?: string | null;
+}) {
+  const haystack = [input.name, input.description, input.sectionName]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  if (/(glaze|glazed|shiny|syrup|iced|soup|curry|ramen|broth|sauce|noodles|dessert)/.test(haystack)) {
+    return "soft side-back lighting with gentle fill to reveal gloss, depth, and texture";
+  }
+
+  if (/(grill|grilled|roast|roasted|fried|crispy|char|charred|bbq|barbecue)/.test(haystack)) {
+    return "soft side lighting that brings out crisp edges, char, and surface texture";
+  }
+
+  return "soft diffused side lighting with controlled shadows and clean highlight rolloff";
+}
+
+function buildPrompt(input: {
+  name: string;
+  description?: string | null;
+  cuisineType?: string | null;
+  sectionName?: string | null;
+  restaurantName?: string | null;
+}) {
+  const cuisine = normalize(input.cuisineType);
+  const angle = inferAngle(input);
+  const lighting = inferLighting(input);
+  const cuisineDirection = cuisine
+    ? `Use plating, vessel choice, garnish restraint, and surface styling that feel authentic to ${input.cuisineType} cuisine without falling into stereotypes or clutter.`
+    : "Use neutral, tasteful restaurant plating and a minimal surface that supports the dish without distraction.";
+
   return [
-    "Create an appetizing, photorealistic restaurant menu image for a single dish.",
-    `Dish name: ${input.name}`,
-    input.description ? `Dish description: ${input.description}` : null,
-    "Style: premium editorial food photography, natural soft light, realistic plating, clean composition.",
-    "Constraints: no text, no watermark, no collage, no split-screen, no hands unless essential to serving.",
+    "Create one photorealistic, premium restaurant menu image.",
+    "",
+    "<subject>",
+    `Dish: ${input.name}`,
+    input.description ? `Description: ${input.description}` : "Description: not provided",
+    input.sectionName ? `Menu section: ${input.sectionName}` : null,
+    input.cuisineType ? `Cuisine: ${input.cuisineType}` : null,
+    input.restaurantName ? `Restaurant: ${input.restaurantName}` : null,
+    "</subject>",
+    "",
+    "<goal>",
+    "The result must look like a real professionally shot food photograph for a premium restaurant menu.",
+    "The dish should look delicious, realistic, and immediately understandable at a glance on mobile.",
+    "</goal>",
+    "",
+    "<photography>",
+    'Use a "photo of" interpretation, not illustration or CGI.',
+    "Food still life photography, macro / short telephoto look, 60-105mm equivalent, high detail, precise focus, controlled lighting.",
+    `Camera angle: ${angle}.`,
+    `Lighting: ${lighting}.`,
+    "Compose for a square menu card with safe margins, one hero serving, clean framing, and shallow but believable depth of field.",
+    "Show texture, moisture, crispness, steam, char, crumb, or gloss when appropriate to the dish.",
+    "</photography>",
+    "",
+    "<styling>",
+    cuisineDirection,
+    "Keep props minimal and editorial. The dish must remain the hero.",
+    "Use appetizing but natural color, realistic portioning, and believable plating.",
+    "If the dish name is ambiguous, choose the most common restaurant presentation that fits the cuisine and menu section.",
+    "</styling>",
+    "",
+    "<accuracy>",
+    "Stay faithful to the likely real ingredients and presentation implied by the dish name and description.",
+    "Do not invent unrelated side dishes, drinks, duplicate plates, or decorative elements that would confuse the menu item.",
+    "Only include utensils, napkins, boards, or serving ware if they support realism without stealing attention.",
+    "Garnish should be minimal, edible, and relevant to the dish.",
+    "</accuracy>",
+    "",
+    "<avoid>",
+    "No text, labels, logos, watermarks, collages, split screens, or menu layouts.",
+    "No surrealism, no cartoon look, no plastic-looking food, no exaggerated saturation, no messy table scene.",
+    "No extra hands or people unless absolutely essential to the authentic serving style.",
+    "No duplicated ingredients or impossible anatomy in utensils or serving ware.",
+    "</avoid>",
   ]
     .filter(Boolean)
     .join("\n");
@@ -88,6 +202,9 @@ async function requestImageFromModel(model: string, prompt: string, apiKey: stri
 export async function generateDishImage(input: {
   name: string;
   description?: string | null;
+  cuisineType?: string | null;
+  sectionName?: string | null;
+  restaurantName?: string | null;
 }) {
   const apiKey = getGoogleApiKey();
   if (!apiKey) {

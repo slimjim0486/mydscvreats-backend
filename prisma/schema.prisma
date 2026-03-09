@@ -44,6 +44,7 @@ model Restaurant {
   name               String
   description        String?
   cuisineType        String?            @map("cuisine_type")
+  themeKey           String?            @map("theme_key")
   location           String?
   address            String?
   phone              String?

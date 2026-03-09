@@ -31,6 +31,10 @@ export async function processMenuImageJob(data: { menuItemId: string }) {
     where: {
       id: data.menuItemId,
     },
+    include: {
+      restaurant: true,
+      section: true,
+    },
   });
 
   if (!item) {
@@ -46,6 +50,9 @@ export async function processMenuImageJob(data: { menuItemId: string }) {
     const generated = await generateDishImage({
       name: item.name,
       description: item.description,
+      cuisineType: item.restaurant.cuisineType,
+      sectionName: item.section.name,
+      restaurantName: item.restaurant.name,
     });
 
     const upload = await uploadBuffer({
