@@ -1,0 +1,20 @@
+import { getBoss, MENU_IMAGE_JOB, processMenuImageJob } from "@/queue/image-generation";
+
+async function main() {
+  const boss = await getBoss();
+  await boss.work(MENU_IMAGE_JOB, async (jobs) => {
+    const [job] = jobs;
+    if (!job) {
+      return;
+    }
+
+    await processMenuImageJob(job.data as { menuItemId: string });
+  });
+
+  console.log("pg-boss worker started");
+}
+
+main().catch((error) => {
+  console.error("Worker failed to start", error);
+  process.exit(1);
+});

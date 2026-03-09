@@ -1,0 +1,137 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  restaurant_owner
+  admin
+}
+
+enum SubscriptionStatus {
+  trial
+  active
+  paused
+  cancelled
+}
+
+enum SubscriptionPlan {
+  starter
+  pro
+}
+
+model User {
+  id        String   @id @default(cuid())
+  clerkId   String   @unique @map("clerk_id")
+  email     String   @unique
+  fullName  String?  @map("full_name")
+  role      UserRole @default(restaurant_owner)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  restaurants Restaurant[]
+
+  @@map("users")
+}
+
+model Restaurant {
+  id                 String             @id @default(cuid())
+  slug               String             @unique
+  name               String
+  description        String?
+  cuisineType        String?            @map("cuisine_type")
+  location           String?
+  address            String?
+  phone              String?
+  website            String?
+  logoUrl            String?            @map("logo_url")
+  coverImageUrl      String?            @map("cover_image_url")
+  isPublished        Boolean            @default(false) @map("is_published")
+  subscriptionStatus SubscriptionStatus @default(trial) @map("subscription_status")
+  trialEndsAt        DateTime?          @map("trial_ends_at")
+  ownerId            String             @map("owner_user_id")
+  createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
+
+  owner        User           @relation(fields: [ownerId], references: [id])
+  menuSections MenuSection[]
+  menuItems    MenuItem[]
+  subscription Subscription?
+  pageViews    PageView[]
+
+  @@index([ownerId])
+  @@map("restaurants")
+}
+
+model MenuSection {
+  id           String   @id @default(cuid())
+  restaurantId String   @map("restaurant_id")
+  name         String
+  displayOrder Int      @default(0) @map("display_order")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  items      MenuItem[]
+
+  @@index([restaurantId, displayOrder])
+  @@map("menu_sections")
+}
+
+model MenuItem {
+  id           String   @id @default(cuid())
+  sectionId    String   @map("section_id")
+  restaurantId String   @map("restaurant_id")
+  name         String
+  description  String?
+  price        Decimal  @db.Decimal(10, 2)
+  currency     String   @default("AED")
+  imageUrl     String?  @map("image_url")
+  imageStatus  String   @default("none") @map("image_status")
+  isAvailable  Boolean  @default(true) @map("is_available")
+  displayOrder Int      @default(0) @map("display_order")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  section    MenuSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  restaurant Restaurant  @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@index([restaurantId, displayOrder])
+  @@index([sectionId, displayOrder])
+  @@map("menu_items")
+}
+
+model Subscription {
+  id                   String             @id @default(cuid())
+  restaurantId         String             @unique @map("restaurant_id")
+  stripeCustomerId     String?            @map("stripe_customer_id")
+  stripeSubscriptionId String?            @map("stripe_subscription_id")
+  plan                 SubscriptionPlan
+  status               SubscriptionStatus
+  currentPeriodEnd     DateTime?          @map("current_period_end")
+  createdAt            DateTime           @default(now()) @map("created_at")
+  updatedAt            DateTime           @updatedAt @map("updated_at")
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@map("subscriptions")
+}
+
+model PageView {
+  id           String   @id @default(cuid())
+  restaurantId String   @map("restaurant_id")
+  path         String
+  userAgent    String?  @map("user_agent")
+  referrer     String?
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@index([restaurantId, createdAt])
+  @@map("page_views")
+}
