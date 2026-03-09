@@ -5,6 +5,14 @@ const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   PORT: z.coerce.number().default(3001),
   ANTHROPIC_API_KEY: z.string().optional(),
+  GEMINI_API_KEY: z.string().optional(),
+  GOOGLE_API_KEY: z.string().optional(),
+  GOOGLE_IMAGE_API_URL: z
+    .string()
+    .url()
+    .default("https://generativelanguage.googleapis.com/v1beta/interactions"),
+  GOOGLE_IMAGE_MODEL: z.string().default("gemini-3-pro-image-preview"),
+  GOOGLE_IMAGE_FALLBACK_MODEL: z.string().default("gemini-2.5-flash-image"),
   NANOBANANA_API_KEY: z.string().optional(),
   NANOBANANA_API_URL: z.string().url().optional(),
   R2_ACCOUNT_ID: z.string().optional(),

@@ -1,7 +1,7 @@
 import PgBoss from "pg-boss";
 import { env } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
-import { generateDishImage } from "@/services/nanobanana";
+import { generateDishImage } from "@/services/google-image";
 import { uploadBuffer } from "@/services/r2";
 
 export const MENU_IMAGE_JOB = "menu-image-generation";
@@ -52,7 +52,7 @@ export async function processMenuImageJob(data: { menuItemId: string }) {
       buffer: generated.buffer,
       contentType: generated.contentType,
       folder: `restaurants/${item.restaurantId}/menu-items`,
-      key: `restaurants/${item.restaurantId}/menu-items/${item.id}.png`,
+      key: `restaurants/${item.restaurantId}/menu-items/${item.id}.${generated.extension}`,
     });
 
     await prisma.menuItem.update({
