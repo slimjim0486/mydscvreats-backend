@@ -229,6 +229,14 @@ function getExtensionFromMimeType(contentType: string) {
   }
 }
 
+function shouldTryFallbackModel(error: unknown) {
+  if (!(error instanceof ApiError)) {
+    return true;
+  }
+
+  return ![429, 500, 502, 503, 504].includes(error.status);
+}
+
 async function requestImageFromModel(model: string, prompt: string, apiKey: string) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
@@ -284,25 +292,36 @@ export async function generateDishImage(input: {
   sectionName?: string | null;
   restaurantName?: string | null;
   promptModifier?: string | null;
+  allowFallback?: boolean;
 }) {
   const apiKey = getGoogleApiKey();
   if (!apiKey) {
     throw new ApiError("Google image generation is not configured", 503);
   }
 
-  const models = Array.from(
-    new Set([env.GOOGLE_IMAGE_MODEL, env.GOOGLE_IMAGE_FALLBACK_MODEL].filter(Boolean))
-  );
+  const models = [env.GOOGLE_IMAGE_MODEL];
+  if (
+    (input.allowFallback ?? env.GOOGLE_IMAGE_ALLOW_FALLBACK) &&
+    env.GOOGLE_IMAGE_FALLBACK_MODEL &&
+    env.GOOGLE_IMAGE_FALLBACK_MODEL !== env.GOOGLE_IMAGE_MODEL
+  ) {
+    models.push(env.GOOGLE_IMAGE_FALLBACK_MODEL);
+  }
 
   const prompt = buildPrompt(input);
   let lastError: unknown = null;
 
-  for (const model of models) {
+  for (const [index, model] of models.entries()) {
     try {
       return await requestImageFromModel(model, prompt, apiKey);
     } catch (error) {
       lastError = error;
       console.warn(`Google image generation failed for model ${model}`, error);
+
+      const hasAnotherModel = index < models.length - 1;
+      if (!hasAnotherModel || !shouldTryFallbackModel(error)) {
+        break;
+      }
     }
   }
 

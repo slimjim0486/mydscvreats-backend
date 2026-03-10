@@ -13,6 +13,7 @@ const MENU_IMAGE_RETRY_DELAY_SECONDS = 60;
 export type MenuImageJobData = {
   menuItemId: string;
   imageId: string;
+  allowFallback?: boolean;
 };
 
 type MenuImageWorkerJob = PgBoss.JobWithMetadata<MenuImageJobData>;
@@ -50,6 +51,7 @@ export async function enqueueMenuItemImage(options: {
   menuItemId: string;
   imageId: string;
   priority?: number;
+  allowFallback?: boolean;
 }) {
   await ensureMenuImageQueue();
   const queue = await getBoss();
@@ -58,6 +60,7 @@ export async function enqueueMenuItemImage(options: {
     {
       menuItemId: options.menuItemId,
       imageId: options.imageId,
+      allowFallback: options.allowFallback,
     },
     {
       priority: options.priority,
@@ -175,6 +178,7 @@ export async function processMenuImageJob(job: MenuImageWorkerJob) {
       sectionName: image.menuItem.section.name,
       restaurantName: image.menuItem.restaurant.name,
       promptModifier: image.promptModifier,
+      allowFallback: job.data.allowFallback,
     });
 
     const upload = await uploadBuffer({

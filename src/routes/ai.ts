@@ -24,6 +24,8 @@ const extractSchema = z.object({
 const imageSchema = z.object({
   menuItemId: z.string().cuid(),
   promptModifier: z.string().trim().max(240).optional(),
+  allowFallback: z.boolean().optional(),
+  replaceImageId: z.string().cuid().optional(),
 });
 
 export const aiRoute = new Hono<{
@@ -81,6 +83,27 @@ export const aiRoute = new Hono<{
       const image = await prisma.$transaction(async (tx) => {
         const prepared = await ensurePrimaryImageRecord(tx, item.id);
         const images = prepared?.images ?? [];
+        if (data.replaceImageId) {
+          const existing = images.find((image) => image.id === data.replaceImageId);
+
+          if (!existing) {
+            throw new ApiError("Image variant not found", 404);
+          }
+
+          if (existing.imageUrl && existing.imageStatus !== "failed") {
+            throw new ApiError("Only failed image variants can be retried", 400);
+          }
+
+          return tx.menuItemImage.update({
+            where: { id: existing.id },
+            data: {
+              promptModifier,
+              imageUrl: null,
+              imageStatus: "none",
+            },
+          });
+        }
+
         const nextSlot = getNextImageSlot(images);
 
         if (nextSlot === null) {
@@ -103,6 +126,7 @@ export const aiRoute = new Hono<{
           menuItemId: item.id,
           imageId: image.id,
           priority: entitlements.imageGenerationPriority,
+          allowFallback: data.allowFallback,
         });
       } catch (error) {
         await prisma.$transaction(async (tx) => {
