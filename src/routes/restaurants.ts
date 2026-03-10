@@ -149,12 +149,6 @@ export const restaurantsRoute = new Hono<{
           isPublished: data.isPublished ?? false,
           trialEndsAt: null,
           subscriptionStatus: "trial",
-          subscription: {
-            create: {
-              plan: "starter",
-              status: "trial",
-            },
-          },
         },
         include: {
           subscription: true,
