@@ -83,6 +83,16 @@ export const aiRoute = new Hono<{
       const image = await prisma.$transaction(async (tx) => {
         const prepared = await ensurePrimaryImageRecord(tx, item.id);
         const images = prepared?.images ?? [];
+        const hasPendingImage = images.some((image) =>
+          image.id === data.replaceImageId
+            ? false
+            : image.imageStatus === "none" || image.imageStatus === "generating"
+        );
+
+        if (hasPendingImage) {
+          throw new ApiError("Image generation is already in progress for this dish", 409);
+        }
+
         if (data.replaceImageId) {
           const existing = images.find((image) => image.id === data.replaceImageId);
 
