@@ -47,7 +47,7 @@ getBoss()
     await boss.work(MENU_IMAGE_JOB, async (jobs) => {
       const [job] = jobs;
       if (!job) return;
-      await processMenuImageJob(job.data as { menuItemId: string });
+      await processMenuImageJob(job.data as { menuItemId: string; imageId: string });
     });
     console.log("pg-boss image worker started");
   })

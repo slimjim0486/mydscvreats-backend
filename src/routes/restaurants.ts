@@ -105,6 +105,11 @@ export const restaurantsRoute = new Hono<{
             include: {
               items: {
                 orderBy: { displayOrder: "asc" },
+                include: {
+                  images: {
+                    orderBy: { slot: "asc" },
+                  },
+                },
               },
             },
           },

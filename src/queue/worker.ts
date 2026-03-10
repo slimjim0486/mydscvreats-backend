@@ -8,7 +8,7 @@ async function main() {
       return;
     }
 
-    await processMenuImageJob(job.data as { menuItemId: string });
+    await processMenuImageJob(job.data as { menuItemId: string; imageId: string });
   });
 
   console.log("pg-boss worker started");
