@@ -110,6 +110,9 @@ export const restaurantsRoute = new Hono<{
                   images: {
                     orderBy: { slot: "asc" },
                   },
+                  dietaryTags: {
+                    include: { tag: true },
+                  },
                 },
               },
             },
@@ -176,6 +179,14 @@ export const restaurantsRoute = new Hono<{
               items: {
                 where: auth ? undefined : { isAvailable: true },
                 orderBy: { displayOrder: "asc" },
+                include: {
+                  images: {
+                    orderBy: { slot: "asc" },
+                  },
+                  dietaryTags: {
+                    include: { tag: true },
+                  },
+                },
               },
             },
           },
