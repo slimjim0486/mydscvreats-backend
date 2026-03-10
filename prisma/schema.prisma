@@ -58,7 +58,7 @@ model Restaurant {
   createdAt          DateTime           @default(now()) @map("created_at")
   updatedAt          DateTime           @updatedAt @map("updated_at")
 
-  owner        User           @relation(fields: [ownerId], references: [id])
+  owner        User          @relation(fields: [ownerId], references: [id])
   menuSections MenuSection[]
   menuItems    MenuItem[]
   subscription Subscription?
@@ -84,23 +84,26 @@ model MenuSection {
 }
 
 model MenuItem {
-  id           String   @id @default(cuid())
-  sectionId    String   @map("section_id")
-  restaurantId String   @map("restaurant_id")
-  name         String
-  description  String?
-  price        Decimal  @db.Decimal(10, 2)
-  currency     String   @default("AED")
-  imageUrl     String?  @map("image_url")
-  imageStatus  String   @default("none") @map("image_status")
-  isAvailable  Boolean  @default(true) @map("is_available")
-  displayOrder Int      @default(0) @map("display_order")
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  id                  String   @id @default(cuid())
+  sectionId           String   @map("section_id")
+  restaurantId        String   @map("restaurant_id")
+  name                String
+  description         String?
+  price               Decimal  @db.Decimal(10, 2)
+  currency            String   @default("AED")
+  imageUrl            String?  @map("image_url")
+  imageStatus         String   @default("none") @map("image_status")
+  isAvailable         Boolean  @default(true) @map("is_available")
+  displayOrder        Int      @default(0) @map("display_order")
+  aiDescriptionStatus String?  @map("ai_description_status")
+  originalDescription String?  @map("original_description")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
 
-  section    MenuSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
-  restaurant Restaurant  @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  images     MenuItemImage[]
+  section     MenuSection          @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  restaurant  Restaurant           @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  images      MenuItemImage[]
+  dietaryTags MenuItemDietaryTag[]
 
   @@index([restaurantId, displayOrder])
   @@index([sectionId, displayOrder])
@@ -154,4 +157,55 @@ model PageView {
 
   @@index([restaurantId, createdAt])
   @@map("page_views")
+}
+
+model DietaryTag {
+  id           String               @id @default(cuid())
+  key          String               @unique
+  label        String
+  icon         String?
+  category     String               @default("dietary")
+  menuItemTags MenuItemDietaryTag[]
+
+  @@map("dietary_tags")
+}
+
+model MenuItemDietaryTag {
+  id         String @id @default(cuid())
+  menuItemId String @map("menu_item_id")
+  tagId      String @map("tag_id")
+  source     String @default("manual")
+  confidence Float?
+
+  menuItem MenuItem   @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  tag      DietaryTag @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([menuItemId, tagId])
+  @@index([menuItemId])
+  @@map("menu_item_dietary_tags")
+}
+
+model MenuAnalysis {
+  id           String   @id @default(cuid())
+  restaurantId String   @map("restaurant_id")
+  analysisType String   @map("analysis_type")
+  result       Json
+  menuHash     String   @map("menu_hash")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([restaurantId, analysisType])
+  @@map("menu_analyses")
+}
+
+model AiUsageLog {
+  id           String   @id @default(cuid())
+  restaurantId String   @map("restaurant_id")
+  feature      String
+  tokensIn     Int      @default(0) @map("tokens_in")
+  tokensOut    Int      @default(0) @map("tokens_out")
+  costUsd      Float    @default(0) @map("cost_usd")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([restaurantId, feature, createdAt])
+  @@map("ai_usage_logs")
 }

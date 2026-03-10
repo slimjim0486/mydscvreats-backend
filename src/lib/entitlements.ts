@@ -1,5 +1,6 @@
 export type SubscriptionPlan = "starter" | "pro";
 export type AnalyticsTier = "basic" | "advanced";
+export type MenuAnalysisLevel = "basic" | "full";
 
 export interface PlanEntitlements {
   plan: SubscriptionPlan | null;
@@ -10,6 +11,11 @@ export interface PlanEntitlements {
   analyticsTier: AnalyticsTier;
   imageGenerationPriority: number;
   priorityImageGeneration: boolean;
+  aiDescriptionLimit: number | null;
+  bulkDescriptionEnabled: boolean;
+  aiTagAnalysisLimit: number | null;
+  menuAnalysisLevel: MenuAnalysisLevel;
+  analysisLimit: number | null;
 }
 
 const PLAN_ENTITLEMENTS: Record<
@@ -23,6 +29,11 @@ const PLAN_ENTITLEMENTS: Record<
     analyticsTier: "basic",
     imageGenerationPriority: 0,
     priorityImageGeneration: false,
+    aiDescriptionLimit: 5,
+    bulkDescriptionEnabled: false,
+    aiTagAnalysisLimit: 1,
+    menuAnalysisLevel: "basic",
+    analysisLimit: 1,
   },
   pro: {
     menuItemLimit: null,
@@ -31,6 +42,11 @@ const PLAN_ENTITLEMENTS: Record<
     analyticsTier: "advanced",
     imageGenerationPriority: 10,
     priorityImageGeneration: true,
+    aiDescriptionLimit: null,
+    bulkDescriptionEnabled: true,
+    aiTagAnalysisLimit: null,
+    menuAnalysisLevel: "full",
+    analysisLimit: null,
   },
 };
 
@@ -43,6 +59,11 @@ const DRAFT_ENTITLEMENTS: PlanEntitlements = {
   analyticsTier: "basic",
   imageGenerationPriority: 0,
   priorityImageGeneration: false,
+  aiDescriptionLimit: 3,
+  bulkDescriptionEnabled: false,
+  aiTagAnalysisLimit: 1,
+  menuAnalysisLevel: "basic",
+  analysisLimit: 1,
 };
 
 type RestaurantPlanSource =

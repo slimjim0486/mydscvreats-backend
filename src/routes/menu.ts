@@ -124,6 +124,11 @@ export const menuRoute = new Hono<{
             include: {
               items: {
                 orderBy: { displayOrder: "asc" },
+                include: {
+                  dietaryTags: {
+                    include: { tag: true },
+                  },
+                },
               },
             },
           },
