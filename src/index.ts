@@ -7,6 +7,7 @@ import { getBoss, MENU_IMAGE_JOB, processMenuImageJob } from "@/queue/image-gene
 import { analyticsRoute } from "@/routes/analytics";
 import { aiRoute } from "@/routes/ai";
 import { menuRoute } from "@/routes/menu";
+import { previewRoute } from "@/routes/preview";
 import { restaurantsRoute } from "@/routes/restaurants";
 import { subscriptionsRoute } from "@/routes/subscriptions";
 import { uploadRoute } from "@/routes/upload";
@@ -25,6 +26,7 @@ app.use(
 
 app.get("/health", (c) => c.json({ ok: true }));
 app.route("/api/restaurants", restaurantsRoute);
+app.route("/api/preview", previewRoute);
 app.route("/api/menu", menuRoute);
 app.route("/api/menu", aiRoute);
 app.route("/api/subscriptions", subscriptionsRoute);
