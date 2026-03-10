@@ -49,6 +49,56 @@ const VALID_TAG_KEYS = [
   "mild",
 ];
 
+/**
+ * Attempt to recover a truncated JSON array of suggestions.
+ * If the output was cut off mid-object, we close any open strings/objects/arrays
+ * and parse whatever complete entries we got.
+ */
+function recoverTruncatedJson(text: string): { suggestions: ItemTagSuggestions[] } {
+  // Try parsing as-is first
+  try {
+    return JSON.parse(text);
+  } catch {
+    // continue to recovery
+  }
+
+  // Extract just the suggestions array content
+  const suggestionsStart = text.indexOf('"suggestions"');
+  if (suggestionsStart === -1) {
+    return { suggestions: [] };
+  }
+
+  const arrayStart = text.indexOf("[", suggestionsStart);
+  if (arrayStart === -1) {
+    return { suggestions: [] };
+  }
+
+  // Find the last complete object by looking for the last "}," or "}" before array close
+  let content = text.slice(arrayStart);
+
+  // Try progressively trimming from the end to find valid JSON
+  // Look for the last complete item boundary
+  const lastCompleteItem = content.lastIndexOf('},');
+  const lastClosedItem = content.lastIndexOf('}]');
+
+  if (lastClosedItem !== -1) {
+    // Array might be properly closed already, just outer object missing
+    content = content.slice(0, lastClosedItem + 2);
+  } else if (lastCompleteItem !== -1) {
+    // Cut after the last complete item and close the array
+    content = content.slice(0, lastCompleteItem + 1) + ']';
+  } else {
+    return { suggestions: [] };
+  }
+
+  try {
+    const suggestions = JSON.parse(content) as ItemTagSuggestions[];
+    return { suggestions };
+  } catch {
+    return { suggestions: [] };
+  }
+}
+
 export async function suggestDietaryTags(
   restaurant: RestaurantContext,
   items: MenuItemInput[]
@@ -69,26 +119,26 @@ export async function suggestDietaryTags(
   const menuListing = items
     .map(
       (item) =>
-        `- ID: ${item.id} | Section: ${item.sectionName} | Name: ${item.name} | Description: ${item.description ?? "(none)"}`
+        `- ID: ${item.id} | ${item.sectionName} | ${item.name} | ${item.description ?? "(none)"}`
     )
     .join("\n");
 
   const response = await client.messages.create({
     model: "claude-sonnet-4-6",
-    max_tokens: 4096,
+    max_tokens: 16384,
     system: `You are a food allergen and dietary classification expert analyzing a Dubai restaurant menu.
 
 Available tags: ${VALID_TAG_KEYS.join(", ")}
 
 Rules:
 - Be CONSERVATIVE: only tag what is confidently inferable from the dish name and description
-- For allergens (contains_nuts, contains_shellfish, etc.), flag when the ingredient is LIKELY present based on dish name/description
+- For allergens (contains_nuts, contains_shellfish, etc.), flag when the ingredient is LIKELY present
 - For dietary tags (vegetarian, vegan, etc.), only tag if the dish clearly qualifies
-- Most Dubai restaurants serve halal food — tag "halal" if the restaurant cuisine suggests it (Arabic, Indian, Pakistani, Turkish, etc.)
+- Most Dubai restaurants serve halal food — tag "halal" if the cuisine suggests it (Arabic, Indian, Pakistani, Turkish, etc.)
 - Confidence: 0.9+ = very confident, 0.7-0.89 = likely, 0.5-0.69 = possible
 - Only include tags with confidence >= 0.5
-- Return ONLY valid JSON in this format:
-{ "suggestions": [{ "menuItemId": "id", "tags": [{ "tagKey": "tag", "confidence": 0.9, "reasoning": "brief reason" }] }] }`,
+- Keep "reasoning" to 5 words max
+- Return ONLY valid JSON: {"suggestions":[{"menuItemId":"id","tags":[{"tagKey":"tag","confidence":0.9,"reasoning":"short"}]}]}`,
     messages: [
       {
         role: "user",
@@ -113,7 +163,8 @@ Analyze each item and suggest dietary/allergen tags.`,
     .replace(/```$/, "")
     .trim();
 
-  const parsed = JSON.parse(text) as { suggestions: ItemTagSuggestions[] };
+  const wasTruncated = response.stop_reason === "max_tokens";
+  const parsed = wasTruncated ? recoverTruncatedJson(text) : JSON.parse(text) as { suggestions: ItemTagSuggestions[] };
 
   // Filter to only valid tag keys
   const validated = (parsed.suggestions ?? []).map((item) => ({

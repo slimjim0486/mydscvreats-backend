@@ -118,7 +118,7 @@ export async function analyzeMenu(
 
   const response = await client.messages.create({
     model: "claude-sonnet-4-6",
-    max_tokens: 4096,
+    max_tokens: 8192,
     system: `You are a Dubai restaurant menu consultant. Analyze the menu and provide actionable insights.
 
 Current date context: ${month} ${now.getFullYear()}. Consider Dubai's calendar:
