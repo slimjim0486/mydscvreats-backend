@@ -125,6 +125,22 @@ export const menuRoute = new Hono<{
       return errorResponse(c, error);
     }
   })
+  .get("/:restaurantId/image-statuses", requireAuth, async (c) => {
+    try {
+      const auth = c.get("auth");
+      const restaurantId = c.req.param("restaurantId");
+      await assertOwnership(restaurantId, auth.clerkId);
+
+      const items = await prisma.menuItem.findMany({
+        where: { restaurantId },
+        select: { id: true, imageStatus: true, imageUrl: true },
+      });
+
+      return c.json(items);
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  })
   .post("/sections", requireAuth, async (c) => {
     try {
       const auth = c.get("auth");
