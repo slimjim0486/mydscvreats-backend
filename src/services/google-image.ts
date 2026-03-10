@@ -1,14 +1,18 @@
 import { env } from "@/lib/env";
 import { ApiError } from "@/lib/errors";
 
-interface GoogleImageOutput {
-  type?: string;
-  mime_type?: string;
-  data?: string;
-}
-
 interface GoogleImageResponse {
-  outputs?: GoogleImageOutput[];
+  candidates?: {
+    content?: {
+      parts?: {
+        text?: string;
+        inlineData?: {
+          mimeType?: string;
+          data?: string;
+        };
+      }[];
+    };
+  }[];
   error?: {
     message?: string;
   };
@@ -158,16 +162,19 @@ function getExtensionFromMimeType(contentType: string) {
 }
 
 async function requestImageFromModel(model: string, prompt: string, apiKey: string) {
-  const response = await fetch(env.GOOGLE_IMAGE_API_URL, {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+
+  const response = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "x-goog-api-key": apiKey,
     },
     body: JSON.stringify({
-      model,
-      input: prompt,
-      response_modalities: ["IMAGE"],
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: {
+        responseModalities: ["IMAGE"],
+      },
     }),
   });
 
@@ -181,18 +188,17 @@ async function requestImageFromModel(model: string, prompt: string, apiKey: stri
     throw new ApiError(message, response.status);
   }
 
-  const imageOutput = payload?.outputs?.find(
-    (entry) => entry.type?.toLowerCase() === "image" && entry.data
-  );
+  const parts = payload?.candidates?.[0]?.content?.parts ?? [];
+  const imagePart = parts.find((p) => p.inlineData?.data);
 
-  if (!imageOutput?.data) {
+  if (!imagePart?.inlineData?.data) {
     throw new ApiError(`Google image generation returned no image for model ${model}`, 502);
   }
 
-  const contentType = imageOutput.mime_type ?? "image/png";
+  const contentType = imagePart.inlineData.mimeType ?? "image/png";
 
   return {
-    buffer: Buffer.from(imageOutput.data, "base64"),
+    buffer: Buffer.from(imagePart.inlineData.data, "base64"),
     contentType,
     extension: getExtensionFromMimeType(contentType),
     model,
