@@ -20,7 +20,7 @@ const createRestaurantSchema = z.object({
   isPublished: z.boolean().optional(),
 });
 
-const updateRestaurantSchema = createRestaurantSchema.extend({
+const updateRestaurantSchema = createRestaurantSchema.partial().extend({
   slug: z.string().optional(),
   subscriptionStatus: z.enum(["trial", "active", "paused", "cancelled"]).optional(),
 });
