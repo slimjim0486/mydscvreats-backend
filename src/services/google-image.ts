@@ -121,7 +121,7 @@ function buildPrompt(input: {
     `Camera angle: ${angle}.`,
     `Lighting: ${lighting}.`,
     "Compose for a square menu card with safe margins, one hero serving, clean framing, and shallow but believable depth of field.",
-    "Show texture, moisture, crispness, steam, char, crumb, or gloss when appropriate to the dish.",
+    "Show texture, moisture, crispness, char, crumb, or gloss when appropriate to the dish, but no visible steam or vapor.",
     "</photography>",
     "",
     "<styling>",
@@ -143,6 +143,7 @@ function buildPrompt(input: {
     "No surrealism, no cartoon look, no plastic-looking food, no exaggerated saturation, no messy table scene.",
     "No extra hands or people unless absolutely essential to the authentic serving style.",
     "No duplicated ingredients or impossible anatomy in utensils or serving ware.",
+    "No visible steam, smoke, haze, or vapor rising from the food.",
     "</avoid>",
     input.promptModifier
       ? [
