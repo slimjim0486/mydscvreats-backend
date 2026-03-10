@@ -2,7 +2,7 @@ import { getBoss, MENU_IMAGE_JOB, processMenuImageJob } from "@/queue/image-gene
 
 async function main() {
   const boss = await getBoss();
-  await boss.work(MENU_IMAGE_JOB, async (jobs) => {
+  await boss.work(MENU_IMAGE_JOB, { batchSize: 1 }, async (jobs) => {
     const [job] = jobs;
     if (!job) {
       return;

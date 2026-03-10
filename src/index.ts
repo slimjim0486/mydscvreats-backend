@@ -44,7 +44,7 @@ serve(
 // Start the pg-boss worker inline so image generation jobs are processed
 getBoss()
   .then(async (boss) => {
-    await boss.work(MENU_IMAGE_JOB, async (jobs) => {
+    await boss.work(MENU_IMAGE_JOB, { batchSize: 1 }, async (jobs) => {
       const [job] = jobs;
       if (!job) return;
       await processMenuImageJob(job.data as { menuItemId: string; imageId: string });
