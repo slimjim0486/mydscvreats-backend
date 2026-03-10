@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import { getRestaurantEntitlements } from "@/lib/entitlements";
 import { ApiError } from "@/lib/errors";
 import { errorResponse } from "@/lib/http";
 import {
@@ -75,6 +76,7 @@ export const aiRoute = new Hono<{
         throw new ApiError("Menu item not found", 404);
       }
 
+      const entitlements = getRestaurantEntitlements(item.restaurant);
       const promptModifier = data.promptModifier?.trim() || null;
       const image = await prisma.$transaction(async (tx) => {
         const prepared = await ensurePrimaryImageRecord(tx, item.id);
@@ -100,6 +102,7 @@ export const aiRoute = new Hono<{
         await enqueueMenuItemImage({
           menuItemId: item.id,
           imageId: image.id,
+          priority: entitlements.imageGenerationPriority,
         });
       } catch (error) {
         await prisma.$transaction(async (tx) => {
@@ -123,6 +126,7 @@ export const aiRoute = new Hono<{
         queued: true,
         menuItemId: item.id,
         imageId: image.id,
+        priority: entitlements.imageGenerationPriority,
       });
     } catch (error) {
       return errorResponse(c, error);

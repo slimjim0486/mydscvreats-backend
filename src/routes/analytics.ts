@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import { getRestaurantEntitlements } from "@/lib/entitlements";
 import { ApiError } from "@/lib/errors";
 import { errorResponse } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
@@ -49,11 +50,17 @@ export const analyticsRoute = new Hono<{
             clerkId: auth.clerkId,
           },
         },
+        include: {
+          subscription: true,
+        },
       });
 
       if (!restaurant) {
         throw new ApiError("Restaurant not found", 404);
       }
+
+      const entitlements = getRestaurantEntitlements(restaurant);
+      const includeTopPaths = entitlements.analyticsTier === "advanced";
 
       const [totalViews, viewsToday, viewsThisWeek, topPaths] = await Promise.all([
         prisma.pageView.count({ where: { restaurantId } }),
@@ -73,22 +80,25 @@ export const analyticsRoute = new Hono<{
             },
           },
         }),
-        prisma.pageView.groupBy({
-          by: ["path"],
-          where: { restaurantId },
-          _count: {
-            path: true,
-          },
-          orderBy: {
-            _count: {
-              path: "desc",
-            },
-          },
-          take: 5,
-        }),
+        includeTopPaths
+          ? prisma.pageView.groupBy({
+              by: ["path"],
+              where: { restaurantId },
+              _count: {
+                path: true,
+              },
+              orderBy: {
+                _count: {
+                  path: "desc",
+                },
+              },
+              take: 5,
+            })
+          : Promise.resolve([]),
       ]);
 
       return c.json({
+        tier: entitlements.analyticsTier,
         totalViews,
         viewsToday,
         viewsThisWeek,

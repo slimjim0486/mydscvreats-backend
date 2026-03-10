@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import { getMenuItemLimitMessage, getRestaurantEntitlements } from "@/lib/entitlements";
 import { ApiError } from "@/lib/errors";
 import { errorResponse } from "@/lib/http";
 import {
@@ -67,7 +68,7 @@ const selectImageSchema = z.object({
   imageId: z.string().cuid(),
 });
 
-async function assertOwnership(restaurantId: string, clerkId: string) {
+async function getOwnedRestaurantSummary(restaurantId: string, clerkId: string) {
   const restaurant = await prisma.restaurant.findFirst({
     where: {
       id: restaurantId,
@@ -75,10 +76,30 @@ async function assertOwnership(restaurantId: string, clerkId: string) {
         clerkId,
       },
     },
+    include: {
+      subscription: true,
+      _count: {
+        select: {
+          menuItems: true,
+        },
+      },
+    },
   });
 
   if (!restaurant) {
     throw new ApiError("Restaurant not found", 404);
+  }
+
+  return restaurant;
+}
+
+async function assertOwnership(restaurantId: string, clerkId: string) {
+  await getOwnedRestaurantSummary(restaurantId, clerkId);
+}
+
+function assertWithinMenuItemLimit(itemLimit: number | null, totalItems: number) {
+  if (itemLimit !== null && totalItems > itemLimit) {
+    throw new ApiError(getMenuItemLimitMessage(itemLimit), 403);
   }
 }
 
@@ -236,7 +257,13 @@ export const menuRoute = new Hono<{
     try {
       const auth = c.get("auth");
       const data = itemSchema.parse(await c.req.json());
-      await assertOwnership(data.restaurantId, auth.clerkId);
+      const restaurant = await getOwnedRestaurantSummary(data.restaurantId, auth.clerkId);
+      const entitlements = getRestaurantEntitlements(restaurant);
+
+      assertWithinMenuItemLimit(
+        entitlements.menuItemLimit,
+        restaurant._count.menuItems + 1
+      );
 
       const item = await prisma.menuItem.create({
         data: {
@@ -354,7 +381,14 @@ export const menuRoute = new Hono<{
     try {
       const auth = c.get("auth");
       const data = importSchema.parse(await c.req.json());
-      await assertOwnership(data.restaurantId, auth.clerkId);
+      const restaurant = await getOwnedRestaurantSummary(data.restaurantId, auth.clerkId);
+      const entitlements = getRestaurantEntitlements(restaurant);
+      const totalImportedItems = data.sections.reduce(
+        (total, section) => total + section.items.length,
+        0
+      );
+
+      assertWithinMenuItemLimit(entitlements.menuItemLimit, totalImportedItems);
 
       await prisma.$transaction(async (tx) => {
         await tx.menuItem.deleteMany({

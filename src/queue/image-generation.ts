@@ -39,10 +39,20 @@ async function ensureMenuImageQueue() {
 export async function enqueueMenuItemImage(options: {
   menuItemId: string;
   imageId: string;
+  priority?: number;
 }) {
   await ensureMenuImageQueue();
   const queue = await getBoss();
-  const jobId = await queue.send(MENU_IMAGE_JOB, options);
+  const jobId = await queue.send(
+    MENU_IMAGE_JOB,
+    {
+      menuItemId: options.menuItemId,
+      imageId: options.imageId,
+    },
+    {
+      priority: options.priority,
+    }
+  );
 
   if (!jobId) {
     throw new Error(`Failed to enqueue pg-boss job for ${MENU_IMAGE_JOB}`);

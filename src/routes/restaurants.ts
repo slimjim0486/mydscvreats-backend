@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import { withRestaurantEntitlements } from "@/lib/entitlements";
 import { ApiError } from "@/lib/errors";
 import { errorResponse } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
@@ -90,7 +91,7 @@ export const restaurantsRoute = new Hono<{
       },
     });
 
-    return c.json(restaurants);
+      return c.json(restaurants.map((restaurant) => withRestaurantEntitlements(restaurant)));
   })
   .get("/me", requireAuth, async (c) => {
     try {
@@ -116,7 +117,10 @@ export const restaurantsRoute = new Hono<{
         },
       });
 
-      return c.json({ user, restaurant });
+      return c.json({
+        user,
+        restaurant: restaurant ? withRestaurantEntitlements(restaurant) : null,
+      });
     } catch (error) {
       return errorResponse(c, error);
     }
@@ -158,7 +162,7 @@ export const restaurantsRoute = new Hono<{
         },
       });
 
-      return c.json(restaurant, 201);
+      return c.json(withRestaurantEntitlements(restaurant), 201);
     } catch (error) {
       return errorResponse(c, error);
     }
@@ -206,7 +210,7 @@ export const restaurantsRoute = new Hono<{
         }
       }
 
-      return c.json(restaurant);
+      return c.json(withRestaurantEntitlements(restaurant));
     } catch (error) {
       return errorResponse(c, error);
     }
@@ -229,7 +233,7 @@ export const restaurantsRoute = new Hono<{
         },
       });
 
-      return c.json(restaurant);
+      return c.json(withRestaurantEntitlements(restaurant));
     } catch (error) {
       return errorResponse(c, error);
     }
