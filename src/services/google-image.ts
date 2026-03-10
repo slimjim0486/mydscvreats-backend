@@ -15,7 +15,64 @@ interface GoogleImageResponse {
   }[];
   error?: {
     message?: string;
+    details?: unknown;
   };
+}
+
+function parseRetryDelayMs(value: string) {
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  const seconds = Number(trimmed);
+  if (Number.isFinite(seconds)) {
+    return Math.max(0, Math.round(seconds * 1000));
+  }
+
+  const durationMatch = /^(\d+(?:\.\d+)?)s$/i.exec(trimmed);
+  if (durationMatch) {
+    return Math.max(0, Math.round(Number(durationMatch[1]) * 1000));
+  }
+
+  const dateMs = Date.parse(trimmed);
+  if (!Number.isNaN(dateMs)) {
+    return Math.max(0, dateMs - Date.now());
+  }
+
+  return null;
+}
+
+function getRetryAfterMs(response: Response, payload: GoogleImageResponse | null) {
+  const headerValue = response.headers.get("retry-after");
+  if (headerValue) {
+    const parsed = parseRetryDelayMs(headerValue);
+    if (parsed !== null) {
+      return parsed;
+    }
+  }
+
+  const details = Array.isArray(payload?.error?.details) ? payload.error.details : [];
+  for (const detail of details) {
+    if (!detail || typeof detail !== "object") {
+      continue;
+    }
+
+    const retryDelay =
+      "retryDelay" in detail && typeof detail.retryDelay === "string" ? detail.retryDelay : null;
+
+    if (!retryDelay) {
+      continue;
+    }
+
+    const parsed = parseRetryDelayMs(retryDelay);
+    if (parsed !== null) {
+      return parsed;
+    }
+  }
+
+  return null;
 }
 
 function getGoogleApiKey() {
@@ -196,7 +253,11 @@ async function requestImageFromModel(model: string, prompt: string, apiKey: stri
       payload?.error?.message ??
       `Google image generation failed with status ${response.status}`;
 
-    throw new ApiError(message, response.status);
+    throw new ApiError(message, response.status, {
+      model,
+      retryAfterMs: getRetryAfterMs(response, payload),
+      error: payload?.error ?? null,
+    });
   }
 
   const parts = payload?.candidates?.[0]?.content?.parts ?? [];

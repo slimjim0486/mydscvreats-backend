@@ -1,11 +1,21 @@
 import PgBoss from "pg-boss";
 import { buildMenuItemImageSummary, syncMenuItemImageSummary } from "@/lib/menu-item-images";
+import { ApiError, isApiError } from "@/lib/errors";
 import { env } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
 import { generateDishImage } from "@/services/google-image";
 import { uploadBuffer } from "@/services/r2";
 
 export const MENU_IMAGE_JOB = "menu-image-generation";
+const MENU_IMAGE_RETRY_LIMIT = 3;
+const MENU_IMAGE_RETRY_DELAY_SECONDS = 60;
+
+export type MenuImageJobData = {
+  menuItemId: string;
+  imageId: string;
+};
+
+type MenuImageWorkerJob = PgBoss.JobWithMetadata<MenuImageJobData>;
 
 let boss: PgBoss | null = null;
 let queueReady: Promise<void> | null = null;
@@ -51,6 +61,9 @@ export async function enqueueMenuItemImage(options: {
     },
     {
       priority: options.priority,
+      retryLimit: MENU_IMAGE_RETRY_LIMIT,
+      retryDelay: MENU_IMAGE_RETRY_DELAY_SECONDS,
+      retryBackoff: true,
     }
   );
 
@@ -61,9 +74,76 @@ export async function enqueueMenuItemImage(options: {
   return jobId;
 }
 
-export async function processMenuImageJob(data: { menuItemId: string; imageId: string }) {
+function isRetryableImageGenerationError(error: unknown) {
+  return isApiError(error) && [429, 500, 502, 503, 504].includes(error.status);
+}
+
+function isFinalAttempt(job: Pick<MenuImageWorkerJob, "retryCount" | "retryLimit">) {
+  return job.retryCount >= job.retryLimit;
+}
+
+async function markMenuImageFailed(imageId: string, menuItemId: string) {
+  await prisma.$transaction(async (tx) => {
+    await tx.menuItemImage.update({
+      where: { id: imageId },
+      data: {
+        imageStatus: "failed",
+      },
+    });
+
+    const item = await tx.menuItem.findUnique({
+      where: { id: menuItemId },
+      select: {
+        id: true,
+        imageUrl: true,
+        imageStatus: true,
+        images: {
+          select: {
+            id: true,
+            slot: true,
+            imageUrl: true,
+            imageStatus: true,
+            promptModifier: true,
+            isPrimary: true,
+          },
+        },
+      },
+    });
+
+    if (item) {
+      const summary = buildMenuItemImageSummary(item);
+      await tx.menuItem.update({
+        where: { id: item.id },
+        data: summary,
+      });
+    }
+  });
+}
+
+function formatImageJobError(error: unknown) {
+  if (isApiError(error)) {
+    return {
+      message: error.message,
+      status: error.status,
+      details: error.details,
+    };
+  }
+
+  if (error instanceof Error) {
+    return {
+      message: error.message,
+    };
+  }
+
+  return {
+    message: "Unknown image generation error",
+    error,
+  };
+}
+
+export async function processMenuImageJob(job: MenuImageWorkerJob) {
   const image = await prisma.menuItemImage.findUnique({
-    where: { id: data.imageId },
+    where: { id: job.data.imageId },
     include: {
       menuItem: {
         include: {
@@ -77,7 +157,7 @@ export async function processMenuImageJob(data: { menuItemId: string; imageId: s
     },
   });
 
-  if (!image || image.menuItemId !== data.menuItemId) {
+  if (!image || image.menuItemId !== job.data.menuItemId) {
     return;
   }
 
@@ -116,41 +196,44 @@ export async function processMenuImageJob(data: { menuItemId: string; imageId: s
       await syncMenuItemImageSummary(tx, image.menuItemId);
     });
   } catch (error) {
-    console.error("Menu image job failed", error);
-    await prisma.$transaction(async (tx) => {
-      await tx.menuItemImage.update({
-        where: { id: image.id },
-        data: {
-          imageStatus: "failed",
-        },
-      });
+    const retryable = isRetryableImageGenerationError(error);
+    const finalAttempt = isFinalAttempt(job);
 
-      const item = await tx.menuItem.findUnique({
-        where: { id: image.menuItemId },
-        select: {
-          id: true,
-          imageUrl: true,
-          imageStatus: true,
-          images: {
-            select: {
-              id: true,
-              slot: true,
-              imageUrl: true,
-              imageStatus: true,
-              promptModifier: true,
-              isPrimary: true,
-            },
-          },
-        },
+    if (retryable && !finalAttempt) {
+      console.warn("Menu image job hit a retryable image generation error", {
+        imageId: image.id,
+        menuItemId: image.menuItemId,
+        retryCount: job.retryCount,
+        retryLimit: job.retryLimit,
+        error: formatImageJobError(error),
       });
+      throw error;
+    }
 
-      if (item) {
-        const summary = buildMenuItemImageSummary(item);
-        await tx.menuItem.update({
-          where: { id: item.id },
-          data: summary,
-        });
-      }
+    console.error("Menu image job failed", {
+      imageId: image.id,
+      menuItemId: image.menuItemId,
+      retryCount: job.retryCount,
+      retryLimit: job.retryLimit,
+      error: formatImageJobError(error),
     });
+
+    await markMenuImageFailed(image.id, image.menuItemId);
+
+    if (retryable && finalAttempt) {
+      throw error;
+    }
   }
+}
+
+export async function startMenuImageWorker() {
+  const queue = await getBoss();
+  await queue.work(MENU_IMAGE_JOB, { batchSize: 1, includeMetadata: true }, async (jobs) => {
+    const [job] = jobs as MenuImageWorkerJob[];
+    if (!job) {
+      return;
+    }
+
+    await processMenuImageJob(job);
+  });
 }

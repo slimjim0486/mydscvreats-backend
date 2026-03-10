@@ -1,16 +1,7 @@
-import { getBoss, MENU_IMAGE_JOB, processMenuImageJob } from "@/queue/image-generation";
+import { startMenuImageWorker } from "@/queue/image-generation";
 
 async function main() {
-  const boss = await getBoss();
-  await boss.work(MENU_IMAGE_JOB, { batchSize: 1 }, async (jobs) => {
-    const [job] = jobs;
-    if (!job) {
-      return;
-    }
-
-    await processMenuImageJob(job.data as { menuItemId: string; imageId: string });
-  });
-
+  await startMenuImageWorker();
   console.log("pg-boss worker started");
 }
 

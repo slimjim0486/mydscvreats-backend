@@ -7,7 +7,7 @@ const envSchema = z.object({
   ANTHROPIC_API_KEY: z.string().optional(),
   GEMINI_API_KEY: z.string().optional(),
   GOOGLE_API_KEY: z.string().optional(),
-  GOOGLE_IMAGE_MODEL: z.string().default("gemini-2.5-flash-image"),
+  GOOGLE_IMAGE_MODEL: z.string().default("gemini-3-pro-image-preview"),
   GOOGLE_IMAGE_FALLBACK_MODEL: z.string().default("gemini-2.5-flash-image"),
   NANOBANANA_API_KEY: z.string().optional(),
   NANOBANANA_API_URL: z.string().url().optional(),
