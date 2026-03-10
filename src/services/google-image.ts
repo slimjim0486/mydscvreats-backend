@@ -90,6 +90,7 @@ function buildPrompt(input: {
   cuisineType?: string | null;
   sectionName?: string | null;
   restaurantName?: string | null;
+  promptModifier?: string | null;
 }) {
   const cuisine = normalize(input.cuisineType);
   const angle = inferAngle(input);
@@ -143,6 +144,15 @@ function buildPrompt(input: {
     "No extra hands or people unless absolutely essential to the authentic serving style.",
     "No duplicated ingredients or impossible anatomy in utensils or serving ware.",
     "</avoid>",
+    input.promptModifier
+      ? [
+          "",
+          "<variation>",
+          `Additional direction for this variation: ${input.promptModifier}`,
+          "Keep the dish identity the same while changing the presentation or photographic treatment based on that direction.",
+          "</variation>",
+        ].join("\n")
+      : null,
   ]
     .filter(Boolean)
     .join("\n");
@@ -211,6 +221,7 @@ export async function generateDishImage(input: {
   cuisineType?: string | null;
   sectionName?: string | null;
   restaurantName?: string | null;
+  promptModifier?: string | null;
 }) {
   const apiKey = getGoogleApiKey();
   if (!apiKey) {

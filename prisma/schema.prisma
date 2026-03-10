@@ -100,10 +100,29 @@ model MenuItem {
 
   section    MenuSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
   restaurant Restaurant  @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  images     MenuItemImage[]
 
   @@index([restaurantId, displayOrder])
   @@index([sectionId, displayOrder])
   @@map("menu_items")
+}
+
+model MenuItemImage {
+  id             String   @id @default(cuid())
+  menuItemId     String   @map("menu_item_id")
+  slot           Int
+  imageUrl       String?  @map("image_url")
+  imageStatus    String   @default("none") @map("image_status")
+  promptModifier String?  @map("prompt_modifier")
+  isPrimary      Boolean  @default(false) @map("is_primary")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  menuItem MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+
+  @@unique([menuItemId, slot])
+  @@index([menuItemId, createdAt])
+  @@map("menu_item_images")
 }
 
 model Subscription {

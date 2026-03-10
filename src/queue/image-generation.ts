@@ -1,4 +1,5 @@
 import PgBoss from "pg-boss";
+import { buildMenuItemImageSummary, syncMenuItemImageSummary } from "@/lib/menu-item-images";
 import { env } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
 import { generateDishImage } from "@/services/google-image";
@@ -35,10 +36,13 @@ async function ensureMenuImageQueue() {
   await queueReady;
 }
 
-export async function enqueueMenuItemImage(menuItemId: string) {
+export async function enqueueMenuItemImage(options: {
+  menuItemId: string;
+  imageId: string;
+}) {
   await ensureMenuImageQueue();
   const queue = await getBoss();
-  const jobId = await queue.send(MENU_IMAGE_JOB, { menuItemId });
+  const jobId = await queue.send(MENU_IMAGE_JOB, options);
 
   if (!jobId) {
     throw new Error(`Failed to enqueue pg-boss job for ${MENU_IMAGE_JOB}`);
@@ -47,56 +51,96 @@ export async function enqueueMenuItemImage(menuItemId: string) {
   return jobId;
 }
 
-export async function processMenuImageJob(data: { menuItemId: string }) {
-  const item = await prisma.menuItem.findUnique({
-    where: {
-      id: data.menuItemId,
-    },
+export async function processMenuImageJob(data: { menuItemId: string; imageId: string }) {
+  const image = await prisma.menuItemImage.findUnique({
+    where: { id: data.imageId },
     include: {
-      restaurant: true,
-      section: true,
+      menuItem: {
+        include: {
+          restaurant: true,
+          section: true,
+          images: {
+            orderBy: { slot: "asc" },
+          },
+        },
+      },
     },
   });
 
-  if (!item) {
+  if (!image || image.menuItemId !== data.menuItemId) {
     return;
   }
 
-  await prisma.menuItem.update({
-    where: { id: item.id },
+  await prisma.menuItemImage.update({
+    where: { id: image.id },
     data: { imageStatus: "generating" },
   });
+  await prisma.$transaction((tx) => syncMenuItemImageSummary(tx, image.menuItemId));
 
   try {
     const generated = await generateDishImage({
-      name: item.name,
-      description: item.description,
-      cuisineType: item.restaurant.cuisineType,
-      sectionName: item.section.name,
-      restaurantName: item.restaurant.name,
+      name: image.menuItem.name,
+      description: image.menuItem.description,
+      cuisineType: image.menuItem.restaurant.cuisineType,
+      sectionName: image.menuItem.section.name,
+      restaurantName: image.menuItem.restaurant.name,
+      promptModifier: image.promptModifier,
     });
 
     const upload = await uploadBuffer({
       buffer: generated.buffer,
       contentType: generated.contentType,
-      folder: `restaurants/${item.restaurantId}/menu-items`,
-      key: `restaurants/${item.restaurantId}/menu-items/${item.id}.${generated.extension}`,
+      folder: `restaurants/${image.menuItem.restaurantId}/menu-items`,
+      key: `restaurants/${image.menuItem.restaurantId}/menu-items/${image.menuItemId}-${image.slot + 1}.${generated.extension}`,
     });
 
-    await prisma.menuItem.update({
-      where: { id: item.id },
-      data: {
-        imageUrl: upload.url,
-        imageStatus: "generated",
-      },
+    await prisma.$transaction(async (tx) => {
+      await tx.menuItemImage.update({
+        where: { id: image.id },
+        data: {
+          imageUrl: upload.url,
+          imageStatus: "generated",
+        },
+      });
+
+      await syncMenuItemImageSummary(tx, image.menuItemId);
     });
   } catch (error) {
     console.error("Menu image job failed", error);
-    await prisma.menuItem.update({
-      where: { id: item.id },
-      data: {
-        imageStatus: "failed",
-      },
+    await prisma.$transaction(async (tx) => {
+      await tx.menuItemImage.update({
+        where: { id: image.id },
+        data: {
+          imageStatus: "failed",
+        },
+      });
+
+      const item = await tx.menuItem.findUnique({
+        where: { id: image.menuItemId },
+        select: {
+          id: true,
+          imageUrl: true,
+          imageStatus: true,
+          images: {
+            select: {
+              id: true,
+              slot: true,
+              imageUrl: true,
+              imageStatus: true,
+              promptModifier: true,
+              isPrimary: true,
+            },
+          },
+        },
+      });
+
+      if (item) {
+        const summary = buildMenuItemImageSummary(item);
+        await tx.menuItem.update({
+          where: { id: item.id },
+          data: summary,
+        });
+      }
     });
   }
 }

@@ -2,6 +2,11 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { ApiError } from "@/lib/errors";
 import { errorResponse } from "@/lib/http";
+import {
+  ensurePrimaryImageRecord,
+  getNextImageSlot,
+  syncMenuItemImageSummary,
+} from "@/lib/menu-item-images";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/middleware/auth";
 import { enqueueMenuItemImage } from "@/queue/image-generation";
@@ -17,6 +22,7 @@ const extractSchema = z.object({
 
 const imageSchema = z.object({
   menuItemId: z.string().cuid(),
+  promptModifier: z.string().trim().max(240).optional(),
 });
 
 export const aiRoute = new Hono<{
@@ -69,15 +75,54 @@ export const aiRoute = new Hono<{
         throw new ApiError("Menu item not found", 404);
       }
 
-      await enqueueMenuItemImage(item.id);
-      await prisma.menuItem.update({
-        where: { id: item.id },
-        data: { imageStatus: "generating" },
+      const promptModifier = data.promptModifier?.trim() || null;
+      const image = await prisma.$transaction(async (tx) => {
+        const prepared = await ensurePrimaryImageRecord(tx, item.id);
+        const images = prepared?.images ?? [];
+        const nextSlot = getNextImageSlot(images);
+
+        if (nextSlot === null) {
+          throw new ApiError("You can generate up to 3 images per menu item", 400);
+        }
+
+        return tx.menuItemImage.create({
+          data: {
+            menuItemId: item.id,
+            slot: nextSlot,
+            promptModifier,
+            imageStatus: "none",
+            isPrimary: images.length === 0,
+          },
+        });
+      });
+
+      try {
+        await enqueueMenuItemImage({
+          menuItemId: item.id,
+          imageId: image.id,
+        });
+      } catch (error) {
+        await prisma.$transaction(async (tx) => {
+          await tx.menuItemImage.delete({
+            where: { id: image.id },
+          });
+          await syncMenuItemImageSummary(tx, item.id);
+        });
+        throw error;
+      }
+
+      await prisma.$transaction(async (tx) => {
+        await tx.menuItemImage.update({
+          where: { id: image.id },
+          data: { imageStatus: "generating" },
+        });
+        await syncMenuItemImageSummary(tx, item.id);
       });
 
       return c.json({
         queued: true,
         menuItemId: item.id,
+        imageId: image.id,
       });
     } catch (error) {
       return errorResponse(c, error);

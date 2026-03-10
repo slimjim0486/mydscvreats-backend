@@ -2,6 +2,11 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { ApiError } from "@/lib/errors";
 import { errorResponse } from "@/lib/http";
+import {
+  buildMenuItemImageSummary,
+  ensurePrimaryImageRecord,
+  syncMenuItemImageSummary,
+} from "@/lib/menu-item-images";
 import { prisma } from "@/lib/prisma";
 import { requireAuth, resolveAuthHeader } from "@/middleware/auth";
 
@@ -55,6 +60,11 @@ const reorderSchema = z.object({
       ),
     })
   ),
+});
+
+const selectImageSchema = z.object({
+  itemId: z.string().cuid(),
+  imageId: z.string().cuid(),
 });
 
 async function assertOwnership(restaurantId: string, clerkId: string) {
@@ -133,10 +143,31 @@ export const menuRoute = new Hono<{
 
       const items = await prisma.menuItem.findMany({
         where: { restaurantId },
-        select: { id: true, imageStatus: true, imageUrl: true },
+        select: {
+          id: true,
+          imageStatus: true,
+          imageUrl: true,
+          images: {
+            orderBy: { slot: "asc" },
+            select: {
+              id: true,
+              slot: true,
+              imageUrl: true,
+              imageStatus: true,
+              promptModifier: true,
+              isPrimary: true,
+            },
+          },
+        },
       });
 
-      return c.json(items);
+      return c.json(
+        items.map((item) => ({
+          id: item.id,
+          ...buildMenuItemImageSummary(item),
+          images: item.images,
+        }))
+      );
     } catch (error) {
       return errorResponse(c, error);
     }
@@ -264,6 +295,57 @@ export const menuRoute = new Hono<{
 
       await prisma.menuItem.delete({ where: { id: item.id } });
       return c.body(null, 204);
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  })
+  .post("/items/:itemId/images/:imageId/select", requireAuth, async (c) => {
+    try {
+      const auth = c.get("auth");
+      const data = selectImageSchema.parse({
+        itemId: c.req.param("itemId"),
+        imageId: c.req.param("imageId"),
+      });
+
+      const item = await prisma.menuItem.findUnique({
+        where: { id: data.itemId },
+        include: {
+          restaurant: {
+            include: {
+              owner: true,
+            },
+          },
+          images: {
+            orderBy: { slot: "asc" },
+          },
+        },
+      });
+
+      if (!item || item.restaurant.owner.clerkId !== auth.clerkId) {
+        throw new ApiError("Menu item not found", 404);
+      }
+
+      const prepared = await prisma.$transaction((tx) => ensurePrimaryImageRecord(tx, item.id));
+      const images = prepared?.images ?? item.images;
+      const target = images.find((image) => image.id === data.imageId);
+
+      if (!target || !target.imageUrl) {
+        throw new ApiError("Image not found", 404);
+      }
+
+      await prisma.$transaction(async (tx) => {
+        await tx.menuItemImage.updateMany({
+          where: { menuItemId: item.id },
+          data: { isPrimary: false },
+        });
+        await tx.menuItemImage.update({
+          where: { id: target.id },
+          data: { isPrimary: true },
+        });
+        await syncMenuItemImageSummary(tx, item.id);
+      });
+
+      return c.json({ ok: true, imageId: target.id });
     } catch (error) {
       return errorResponse(c, error);
     }
