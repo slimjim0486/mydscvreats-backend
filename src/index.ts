@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { env } from "@/lib/env";
+import { getBoss, MENU_IMAGE_JOB, processMenuImageJob } from "@/queue/image-generation";
 import { analyticsRoute } from "@/routes/analytics";
 import { aiRoute } from "@/routes/ai";
 import { menuRoute } from "@/routes/menu";
@@ -39,3 +40,17 @@ serve(
     console.log(`mydscvr Eats backend listening on http://localhost:${info.port}`);
   }
 );
+
+// Start the pg-boss worker inline so image generation jobs are processed
+getBoss()
+  .then(async (boss) => {
+    await boss.work(MENU_IMAGE_JOB, async (jobs) => {
+      const [job] = jobs;
+      if (!job) return;
+      await processMenuImageJob(job.data as { menuItemId: string });
+    });
+    console.log("pg-boss image worker started");
+  })
+  .catch((error) => {
+    console.error("pg-boss worker failed to start", error);
+  });
