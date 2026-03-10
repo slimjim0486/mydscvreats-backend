@@ -21,6 +21,7 @@ const portalSchema = z.object({
 const webhookSchema = z.object({
   type: z.enum([
     "checkout.session.completed",
+    "customer.subscription.created",
     "invoice.payment_failed",
     "customer.subscription.deleted",
     "customer.subscription.updated",
@@ -34,6 +35,38 @@ const webhookSchema = z.object({
     currentPeriodEnd: z.string().datetime().nullable().optional(),
   }),
 });
+
+function getRestaurantBillingState(
+  status: "trial" | "active" | "paused" | "cancelled",
+  currentPeriodEnd?: string | null
+) {
+  return {
+    subscriptionStatus: status,
+    isPublished: status === "trial" || status === "active",
+    trialEndsAt:
+      status === "trial" && currentPeriodEnd ? new Date(currentPeriodEnd) : null,
+  };
+}
+
+function getSubscriptionMutation(
+  data: z.infer<typeof webhookSchema>["data"]
+) {
+  return {
+    ...(data.plan ? { plan: data.plan } : {}),
+    ...(data.status ? { status: data.status } : {}),
+    ...(data.stripeCustomerId !== undefined
+      ? { stripeCustomerId: data.stripeCustomerId }
+      : {}),
+    ...(data.stripeSubscriptionId !== undefined
+      ? { stripeSubscriptionId: data.stripeSubscriptionId }
+      : {}),
+    ...(data.currentPeriodEnd !== undefined
+      ? {
+          currentPeriodEnd: data.currentPeriodEnd ? new Date(data.currentPeriodEnd) : null,
+        }
+      : {}),
+  };
+}
 
 export const subscriptionsRoute = new Hono<{
   Variables: {
@@ -57,6 +90,7 @@ export const subscriptionsRoute = new Hono<{
         },
         include: {
           owner: true,
+          subscription: true,
         },
       });
 
@@ -64,8 +98,19 @@ export const subscriptionsRoute = new Hono<{
         throw new ApiError("Restaurant not found", 404);
       }
 
+      if (
+        restaurant.subscription?.stripeSubscriptionId &&
+        restaurant.subscription.status !== "cancelled"
+      ) {
+        throw new ApiError(
+          "A Stripe subscription already exists for this restaurant. Use the billing portal to manage it.",
+          409
+        );
+      }
+
       const session = await createCheckoutSession({
         customerEmail: restaurant.owner.email,
+        stripeCustomerId: restaurant.subscription?.stripeCustomerId,
         restaurantId: restaurant.id,
         restaurantName: restaurant.name,
         plan: data.plan,
@@ -127,23 +172,21 @@ export const subscriptionsRoute = new Hono<{
             throw new ApiError("Missing checkout webhook metadata", 400);
           }
 
+          const status = payload.data.status ?? "trial";
+          const subscriptionMutation = getSubscriptionMutation({
+            ...payload.data,
+            status,
+          });
+
           await prisma.subscription.upsert({
             where: {
               restaurantId: payload.data.restaurantId,
             },
-            update: {
-              plan: payload.data.plan,
-              status: "active",
-              stripeCustomerId: payload.data.stripeCustomerId,
-              stripeSubscriptionId: payload.data.stripeSubscriptionId,
-              currentPeriodEnd: payload.data.currentPeriodEnd
-                ? new Date(payload.data.currentPeriodEnd)
-                : null,
-            },
+            update: subscriptionMutation,
             create: {
               restaurantId: payload.data.restaurantId,
               plan: payload.data.plan,
-              status: "active",
+              status,
               stripeCustomerId: payload.data.stripeCustomerId,
               stripeSubscriptionId: payload.data.stripeSubscriptionId,
               currentPeriodEnd: payload.data.currentPeriodEnd
@@ -156,41 +199,65 @@ export const subscriptionsRoute = new Hono<{
             where: {
               id: payload.data.restaurantId,
             },
-            data: {
-              subscriptionStatus: "active",
-              isPublished: true,
-            },
+            data: getRestaurantBillingState(status, payload.data.currentPeriodEnd),
           });
           break;
         }
+        case "customer.subscription.created":
         case "customer.subscription.updated": {
           if (!payload.data.stripeSubscriptionId || !payload.data.status) {
             throw new ApiError("Missing subscription update payload", 400);
           }
 
-          await prisma.subscription.updateMany({
-            where: {
-              stripeSubscriptionId: payload.data.stripeSubscriptionId,
-            },
-            data: {
-              status: payload.data.status,
-              currentPeriodEnd: payload.data.currentPeriodEnd
-                ? new Date(payload.data.currentPeriodEnd)
-                : undefined,
-            },
-          });
+          if (payload.data.restaurantId) {
+            if (!payload.data.plan) {
+              throw new ApiError("Missing subscription plan for restaurant sync", 400);
+            }
 
-          if (payload.data.status === "cancelled") {
+            await prisma.subscription.upsert({
+              where: {
+                restaurantId: payload.data.restaurantId,
+              },
+              update: getSubscriptionMutation(payload.data),
+              create: {
+                restaurantId: payload.data.restaurantId,
+                plan: payload.data.plan,
+                status: payload.data.status,
+                stripeCustomerId: payload.data.stripeCustomerId,
+                stripeSubscriptionId: payload.data.stripeSubscriptionId,
+                currentPeriodEnd: payload.data.currentPeriodEnd
+                  ? new Date(payload.data.currentPeriodEnd)
+                  : null,
+              },
+            });
+
+            await prisma.restaurant.updateMany({
+              where: {
+                id: payload.data.restaurantId,
+              },
+              data: getRestaurantBillingState(
+                payload.data.status,
+                payload.data.currentPeriodEnd
+              ),
+            });
+          } else {
+            await prisma.subscription.updateMany({
+              where: {
+                stripeSubscriptionId: payload.data.stripeSubscriptionId,
+              },
+              data: getSubscriptionMutation(payload.data),
+            });
+
             await prisma.restaurant.updateMany({
               where: {
                 subscription: {
                   stripeSubscriptionId: payload.data.stripeSubscriptionId,
                 },
               },
-              data: {
-                subscriptionStatus: "cancelled",
-                isPublished: false,
-              },
+              data: getRestaurantBillingState(
+                payload.data.status,
+                payload.data.currentPeriodEnd
+              ),
             });
           }
           break;
@@ -219,10 +286,7 @@ export const subscriptionsRoute = new Hono<{
                 stripeSubscriptionId: payload.data.stripeSubscriptionId,
               },
             },
-            data: {
-              subscriptionStatus: status,
-              isPublished: false,
-            },
+            data: getRestaurantBillingState(status),
           });
           break;
         }

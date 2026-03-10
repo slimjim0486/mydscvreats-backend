@@ -20,6 +20,7 @@ export function getStripe() {
 
 export async function createCheckoutSession(input: {
   customerEmail?: string | null;
+  stripeCustomerId?: string | null;
   restaurantId: string;
   restaurantName: string;
   plan: "starter" | "pro";
@@ -42,7 +43,13 @@ export async function createCheckoutSession(input: {
 
   return client.checkout.sessions.create({
     mode: "subscription",
-    customer_email: input.customerEmail ?? undefined,
+    ...(input.stripeCustomerId
+      ? {
+          customer: input.stripeCustomerId,
+        }
+      : {
+          customer_email: input.customerEmail ?? undefined,
+        }),
     line_items: [
       {
         price: priceId,
@@ -51,12 +58,27 @@ export async function createCheckoutSession(input: {
     ],
     success_url: input.successUrl,
     cancel_url: input.cancelUrl,
+    client_reference_id: input.restaurantId,
     metadata: {
       restaurant_id: input.restaurantId,
       plan: input.plan,
       restaurant_name: input.restaurantName,
     },
     allow_promotion_codes: true,
+    payment_method_collection: "if_required",
+    subscription_data: {
+      trial_period_days: env.STRIPE_TRIAL_DAYS,
+      trial_settings: {
+        end_behavior: {
+          missing_payment_method: "cancel",
+        },
+      },
+      metadata: {
+        restaurant_id: input.restaurantId,
+        plan: input.plan,
+        restaurant_name: input.restaurantName,
+      },
+    },
   });
 }
 

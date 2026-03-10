@@ -131,7 +131,6 @@ export const restaurantsRoute = new Hono<{
       const user = await getCurrentUser(auth);
       const data = createRestaurantSchema.parse(await c.req.json());
       const slug = await generateUniqueSlug(data.name);
-      const trialEndsAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
 
       const restaurant = await prisma.restaurant.create({
         data: {
@@ -148,7 +147,7 @@ export const restaurantsRoute = new Hono<{
           logoUrl: data.logoUrl ?? null,
           coverImageUrl: data.coverImageUrl ?? null,
           isPublished: data.isPublished ?? false,
-          trialEndsAt,
+          trialEndsAt: null,
           subscriptionStatus: "trial",
           subscription: {
             create: {
