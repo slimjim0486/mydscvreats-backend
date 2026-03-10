@@ -7,6 +7,7 @@ import { prisma } from "@/lib/prisma";
 export interface AuthContext {
   clerkId: string;
   email: string | null;
+  fullName: string | null;
 }
 
 export async function resolveAuthHeader(authHeader: string | undefined) {
@@ -21,14 +22,23 @@ export async function resolveAuthHeader(authHeader: string | undefined) {
     authorizedParties: [env.FRONTEND_APP_URL],
   });
 
+  const meta = payload as Record<string, unknown>;
+  const email =
+    typeof meta.email === "string"
+      ? meta.email
+      : typeof meta.email_address === "string"
+        ? meta.email_address
+        : typeof meta.primary_email === "string"
+          ? meta.primary_email
+          : null;
+
+  const fullName =
+    typeof meta.full_name === "string" ? meta.full_name : null;
+
   return {
     clerkId: payload.sub,
-    email:
-      typeof payload.email === "string"
-        ? payload.email
-        : typeof payload.email_address === "string"
-          ? payload.email_address
-          : null,
+    email,
+    fullName,
   } satisfies AuthContext;
 }
 
@@ -49,10 +59,12 @@ export async function getCurrentUser(auth: AuthContext) {
     },
     update: {
       email: auth.email ?? `${auth.clerkId}@clerk.local`,
+      ...(auth.fullName && { fullName: auth.fullName }),
     },
     create: {
       clerkId: auth.clerkId,
       email: auth.email ?? `${auth.clerkId}@clerk.local`,
+      fullName: auth.fullName,
     },
   });
 }
