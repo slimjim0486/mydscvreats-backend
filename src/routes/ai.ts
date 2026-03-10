@@ -69,11 +69,11 @@ export const aiRoute = new Hono<{
         throw new ApiError("Menu item not found", 404);
       }
 
+      await enqueueMenuItemImage(item.id);
       await prisma.menuItem.update({
         where: { id: item.id },
         data: { imageStatus: "generating" },
       });
-      await enqueueMenuItemImage(item.id);
 
       return c.json({
         queued: true,

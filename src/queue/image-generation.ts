@@ -7,6 +7,7 @@ import { uploadBuffer } from "@/services/r2";
 export const MENU_IMAGE_JOB = "menu-image-generation";
 
 let boss: PgBoss | null = null;
+let queueReady: Promise<void> | null = null;
 
 export async function getBoss() {
   if (boss) {
@@ -21,9 +22,29 @@ export async function getBoss() {
   return boss;
 }
 
+async function ensureMenuImageQueue() {
+  if (!queueReady) {
+    queueReady = getBoss()
+      .then((queue) => queue.createQueue(MENU_IMAGE_JOB))
+      .catch((error) => {
+        queueReady = null;
+        throw error;
+      });
+  }
+
+  await queueReady;
+}
+
 export async function enqueueMenuItemImage(menuItemId: string) {
+  await ensureMenuImageQueue();
   const queue = await getBoss();
-  await queue.send(MENU_IMAGE_JOB, { menuItemId });
+  const jobId = await queue.send(MENU_IMAGE_JOB, { menuItemId });
+
+  if (!jobId) {
+    throw new Error(`Failed to enqueue pg-boss job for ${MENU_IMAGE_JOB}`);
+  }
+
+  return jobId;
 }
 
 export async function processMenuImageJob(data: { menuItemId: string }) {
