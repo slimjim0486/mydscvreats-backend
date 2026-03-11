@@ -25,7 +25,6 @@ const createRestaurantSchema = z.object({
 });
 
 const updateRestaurantSchema = createRestaurantSchema.partial().extend({
-  slug: z.string().optional(),
   subscriptionStatus: z.enum(["trial", "active", "paused", "cancelled"]).optional(),
 });
 
@@ -271,13 +270,7 @@ export const restaurantsRoute = new Hono<{
 
       const restaurant = await prisma.restaurant.update({
         where: { id: current.id },
-        data: {
-          ...data,
-          slug:
-            data.slug && data.slug !== current.slug
-              ? await generateUniqueSlug(data.slug)
-              : current.slug,
-        },
+        data,
         include: {
           subscription: true,
           shortLink: true,
