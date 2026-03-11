@@ -1,6 +1,7 @@
 export type SubscriptionPlan = "starter" | "pro";
 export type AnalyticsTier = "basic" | "advanced";
 export type MenuAnalysisLevel = "basic" | "full";
+export type SubscriptionStatus = "trial" | "active" | "paused" | "cancelled";
 
 export interface PlanEntitlements {
   plan: SubscriptionPlan | null;
@@ -68,13 +69,19 @@ const DRAFT_ENTITLEMENTS: PlanEntitlements = {
 
 type RestaurantPlanSource =
   | (Record<string, unknown> & {
+      subscriptionStatus?: SubscriptionStatus;
       subscription?: {
-        plan: SubscriptionPlan;
+        plan?: SubscriptionPlan;
+        status?: SubscriptionStatus;
         stripeSubscriptionId?: string | null;
       } | null;
     })
   | null
   | undefined;
+
+function getSubscriptionStatus(source: RestaurantPlanSource): SubscriptionStatus | null {
+  return source?.subscription?.status ?? source?.subscriptionStatus ?? null;
+}
 
 export function getPlanEntitlements(plan: SubscriptionPlan): PlanEntitlements {
   return {
@@ -85,7 +92,7 @@ export function getPlanEntitlements(plan: SubscriptionPlan): PlanEntitlements {
 }
 
 export function hasSelectedPlan(source: RestaurantPlanSource) {
-  return Boolean(source?.subscription?.stripeSubscriptionId);
+  return Boolean(source?.subscription?.plan && getSubscriptionStatus(source) !== "cancelled");
 }
 
 export function getRestaurantPlan(source: RestaurantPlanSource): SubscriptionPlan | null {
@@ -107,6 +114,16 @@ export function withRestaurantEntitlements<T extends RestaurantPlanSource>(
   return {
     ...restaurant,
     entitlements: getRestaurantEntitlements(restaurant),
+  };
+}
+
+export function getEffectiveRestaurantBillingState(source: RestaurantPlanSource) {
+  const status = getSubscriptionStatus(source) ?? "trial";
+  const hasPlan = hasSelectedPlan(source);
+
+  return {
+    subscriptionStatus: status,
+    isPublished: hasPlan && (status === "trial" || status === "active"),
   };
 }
 

@@ -1,6 +1,9 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { withRestaurantEntitlements } from "@/lib/entitlements";
+import {
+  getEffectiveRestaurantBillingState,
+  withRestaurantEntitlements,
+} from "@/lib/entitlements";
 import { ApiError } from "@/lib/errors";
 import { errorResponse } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
@@ -67,6 +70,19 @@ async function generateUniqueSlug(name: string) {
   return slug;
 }
 
+function applyEffectiveBillingState<T extends {
+  isPublished: boolean;
+  subscriptionStatus: "trial" | "active" | "paused" | "cancelled";
+  subscription?: {
+    status: "trial" | "active" | "paused" | "cancelled";
+  } | null;
+}>(restaurant: T) {
+  return {
+    ...restaurant,
+    ...getEffectiveRestaurantBillingState(restaurant),
+  };
+}
+
 export const restaurantsRoute = new Hono<{
   Variables: {
     auth: {
@@ -80,18 +96,34 @@ export const restaurantsRoute = new Hono<{
 
     const restaurants = await prisma.restaurant.findMany({
       where: {
-        isPublished: true,
+        OR: [
+          { isPublished: true },
+          {
+            subscription: {
+              is: {
+                status: {
+                  in: ["trial", "active"],
+                },
+              },
+            },
+          },
+        ],
         ...(cuisineType ? { cuisineType } : {}),
       },
       include: {
         menuItems: true,
+        subscription: true,
       },
       orderBy: {
         updatedAt: "desc",
       },
     });
 
-      return c.json(restaurants.map((restaurant) => withRestaurantEntitlements(restaurant)));
+    return c.json(
+      restaurants.map((restaurant) =>
+        withRestaurantEntitlements(applyEffectiveBillingState(restaurant))
+      )
+    );
   })
   .get("/me", requireAuth, async (c) => {
     try {
@@ -120,9 +152,13 @@ export const restaurantsRoute = new Hono<{
         },
       });
 
+      const hydratedRestaurant = restaurant
+        ? withRestaurantEntitlements(applyEffectiveBillingState(restaurant))
+        : null;
+
       return c.json({
         user,
-        restaurant: restaurant ? withRestaurantEntitlements(restaurant) : null,
+        restaurant: hydratedRestaurant,
       });
     } catch (error) {
       return errorResponse(c, error);
@@ -197,7 +233,9 @@ export const restaurantsRoute = new Hono<{
         throw new ApiError("Restaurant not found", 404);
       }
 
-      if (!restaurant.isPublished) {
+      const hydratedRestaurant = applyEffectiveBillingState(restaurant);
+
+      if (!hydratedRestaurant.isPublished) {
         const ownsRestaurant = auth
           ? await prisma.restaurant.count({
               where: {
@@ -214,7 +252,7 @@ export const restaurantsRoute = new Hono<{
         }
       }
 
-      return c.json(withRestaurantEntitlements(restaurant));
+      return c.json(withRestaurantEntitlements(hydratedRestaurant));
     } catch (error) {
       return errorResponse(c, error);
     }

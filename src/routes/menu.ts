@@ -1,6 +1,10 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { getMenuItemLimitMessage, getRestaurantEntitlements } from "@/lib/entitlements";
+import {
+  getEffectiveRestaurantBillingState,
+  getMenuItemLimitMessage,
+  getRestaurantEntitlements,
+} from "@/lib/entitlements";
 import { ApiError } from "@/lib/errors";
 import { errorResponse } from "@/lib/http";
 import {
@@ -119,6 +123,7 @@ export const menuRoute = new Hono<{
       const restaurant = await prisma.restaurant.findUnique({
         where: { id: restaurantId },
         include: {
+          subscription: true,
           menuSections: {
             orderBy: { displayOrder: "asc" },
             include: {
@@ -139,7 +144,9 @@ export const menuRoute = new Hono<{
         throw new ApiError("Restaurant not found", 404);
       }
 
-      if (!restaurant.isPublished) {
+      const effectiveBillingState = getEffectiveRestaurantBillingState(restaurant);
+
+      if (!effectiveBillingState.isPublished) {
         const ownsRestaurant = auth
           ? await prisma.restaurant.count({
               where: {
