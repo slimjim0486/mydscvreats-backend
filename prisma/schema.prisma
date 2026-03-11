@@ -70,6 +70,7 @@ model Restaurant {
   menuItems    MenuItem[]
   subscription Subscription?
   customDomain RestaurantDomain?
+  shortLink    RestaurantShortLink?
   pageViews    PageView[]
 
   @@index([ownerId])
@@ -183,6 +184,18 @@ model RestaurantDomain {
 
   @@index([restaurantId, status])
   @@map("restaurant_domains")
+}
+
+model RestaurantShortLink {
+  id           String   @id @default(cuid())
+  restaurantId String   @unique @map("restaurant_id")
+  code         String   @unique
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@map("restaurant_short_links")
 }
 
 model DietaryTag {

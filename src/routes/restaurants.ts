@@ -39,6 +39,7 @@ async function getOwnedRestaurant(restaurantId: string, clerkId: string) {
     },
     include: {
       subscription: true,
+      shortLink: true,
       menuSections: {
         orderBy: { displayOrder: "asc" },
         include: {
@@ -113,6 +114,7 @@ export const restaurantsRoute = new Hono<{
       include: {
         menuItems: true,
         subscription: true,
+        shortLink: true,
       },
       orderBy: {
         updatedAt: "desc",
@@ -133,6 +135,7 @@ export const restaurantsRoute = new Hono<{
         where: { ownerId: user.id },
         include: {
           subscription: true,
+          shortLink: true,
           menuSections: {
             orderBy: { displayOrder: "asc" },
             include: {
@@ -191,6 +194,7 @@ export const restaurantsRoute = new Hono<{
         },
         include: {
           subscription: true,
+          shortLink: true,
         },
       });
 
@@ -209,6 +213,7 @@ export const restaurantsRoute = new Hono<{
         where: { slug },
         include: {
           subscription: true,
+          shortLink: true,
           menuSections: {
             orderBy: { displayOrder: "asc" },
             include: {
@@ -272,6 +277,10 @@ export const restaurantsRoute = new Hono<{
             data.slug && data.slug !== current.slug
               ? await generateUniqueSlug(data.slug)
               : current.slug,
+        },
+        include: {
+          subscription: true,
+          shortLink: true,
         },
       });
 

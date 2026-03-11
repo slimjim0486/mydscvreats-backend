@@ -11,6 +11,7 @@ import { dietaryTagsRoute } from "@/routes/dietary-tags";
 import { menuRoute } from "@/routes/menu";
 import { previewRoute } from "@/routes/preview";
 import { restaurantsRoute } from "@/routes/restaurants";
+import { shortLinksRoute } from "@/routes/short-links";
 import { subscriptionsRoute } from "@/routes/subscriptions";
 import { uploadRoute } from "@/routes/upload";
 
@@ -28,6 +29,7 @@ app.use(
 
 app.get("/health", (c) => c.json({ ok: true }));
 app.route("/api/restaurants", restaurantsRoute);
+app.route("/api/short-links", shortLinksRoute);
 app.route("/api/preview", previewRoute);
 app.route("/api/menu", menuRoute);
 app.route("/api/menu", aiRoute);
