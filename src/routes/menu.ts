@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import {
   getEffectiveRestaurantBillingState,
+  getMenuAssistantUpgradeMessage,
   getMenuItemLimitMessage,
   getRestaurantEntitlements,
 } from "@/lib/entitlements";
@@ -26,6 +27,7 @@ const itemSchema = z.object({
   sectionId: z.string().cuid(),
   name: z.string().min(1),
   description: z.string().nullable().optional(),
+  aiNotes: z.string().max(2000).nullable().optional(),
   price: z.coerce.number().nonnegative(),
   currency: z.string().default("AED"),
   imageUrl: z.string().url().nullable().optional(),
@@ -105,6 +107,15 @@ function assertWithinMenuItemLimit(itemLimit: number | null, totalItems: number)
   if (itemLimit !== null && totalItems > itemLimit) {
     throw new ApiError(getMenuItemLimitMessage(itemLimit), 403);
   }
+}
+
+function normalizeOptionalText(value: string | null | undefined) {
+  const normalized = value?.trim();
+  return normalized ? normalized : null;
+}
+
+function hasMeaningfulText(value: string | null | undefined) {
+  return Boolean(normalizeOptionalText(value));
 }
 
 export const menuRoute = new Hono<{
@@ -276,12 +287,16 @@ export const menuRoute = new Hono<{
         entitlements.menuItemLimit,
         restaurant._count.menuItems + 1
       );
+      if (hasMeaningfulText(data.aiNotes) && !entitlements.menuAssistantEnabled) {
+        throw new ApiError(getMenuAssistantUpgradeMessage(), 403);
+      }
 
       const item = await prisma.menuItem.create({
         data: {
           ...data,
           price: data.price,
-          description: data.description ?? null,
+          description: normalizeOptionalText(data.description),
+          aiNotes: normalizeOptionalText(data.aiNotes),
           imageUrl: data.imageUrl ?? null,
           imageStatus: data.imageStatus ?? "none",
           isAvailable: data.isAvailable ?? true,
@@ -299,7 +314,7 @@ export const menuRoute = new Hono<{
       const auth = c.get("auth");
       const item = await prisma.menuItem.findUnique({
         where: { id: c.req.param("id") },
-        include: { restaurant: { include: { owner: true } } },
+        include: { restaurant: { include: { owner: true, subscription: true } } },
       });
 
       if (!item || item.restaurant.owner.clerkId !== auth.clerkId) {
@@ -307,10 +322,18 @@ export const menuRoute = new Hono<{
       }
 
       const data = itemSchema.partial().parse(await c.req.json());
+      const entitlements = getRestaurantEntitlements(item.restaurant);
+      if (hasMeaningfulText(data.aiNotes) && !entitlements.menuAssistantEnabled) {
+        throw new ApiError(getMenuAssistantUpgradeMessage(), 403);
+      }
+
       const updated = await prisma.menuItem.update({
         where: { id: item.id },
         data: {
           ...data,
+          description:
+            data.description === undefined ? undefined : normalizeOptionalText(data.description),
+          aiNotes: data.aiNotes === undefined ? undefined : normalizeOptionalText(data.aiNotes),
           price: data.price,
         },
       });

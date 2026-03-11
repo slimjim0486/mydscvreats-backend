@@ -8,6 +8,7 @@ export interface PlanEntitlements {
   hasSelectedPlan: boolean;
   menuItemLimit: number | null;
   widgetEnabled: boolean;
+  menuAssistantEnabled: boolean;
   customDomainEnabled: boolean;
   shortLinksEnabled: boolean;
   analyticsTier: AnalyticsTier;
@@ -27,6 +28,7 @@ const PLAN_ENTITLEMENTS: Record<
   starter: {
     menuItemLimit: 30,
     widgetEnabled: false,
+    menuAssistantEnabled: false,
     customDomainEnabled: false,
     shortLinksEnabled: false,
     analyticsTier: "basic",
@@ -41,6 +43,7 @@ const PLAN_ENTITLEMENTS: Record<
   pro: {
     menuItemLimit: null,
     widgetEnabled: true,
+    menuAssistantEnabled: true,
     customDomainEnabled: false,
     shortLinksEnabled: true,
     analyticsTier: "advanced",
@@ -59,6 +62,7 @@ const DRAFT_ENTITLEMENTS: PlanEntitlements = {
   hasSelectedPlan: false,
   menuItemLimit: null,
   widgetEnabled: false,
+  menuAssistantEnabled: false,
   customDomainEnabled: false,
   shortLinksEnabled: false,
   analyticsTier: "basic",
@@ -133,4 +137,8 @@ export function getEffectiveRestaurantBillingState(source: RestaurantPlanSource)
 
 export function getMenuItemLimitMessage(limit: number) {
   return `Starter includes up to ${limit} menu items. Upgrade to Pro for unlimited dishes.`;
+}
+
+export function getMenuAssistantUpgradeMessage() {
+  return "AI menu assistant is available on Pro. Upgrade to save private AI notes and offer diner chat.";
 }
