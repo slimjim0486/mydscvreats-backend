@@ -28,6 +28,40 @@ const updateRestaurantSchema = createRestaurantSchema.partial().extend({
   subscriptionStatus: z.enum(["trial", "active", "paused", "cancelled"]).optional(),
 });
 
+const restaurantDetailsInclude = {
+  subscription: true,
+  shortLink: true,
+  menuSections: {
+    orderBy: { displayOrder: "asc" as const },
+    include: {
+      items: {
+        orderBy: { displayOrder: "asc" as const },
+      },
+    },
+  },
+};
+
+const restaurantPublicInclude = {
+  subscription: true,
+  shortLink: true,
+  menuSections: {
+    orderBy: { displayOrder: "asc" as const },
+    include: {
+      items: {
+        orderBy: { displayOrder: "asc" as const },
+        include: {
+          images: {
+            orderBy: { slot: "asc" as const },
+          },
+          dietaryTags: {
+            include: { tag: true },
+          },
+        },
+      },
+    },
+  },
+};
+
 async function getOwnedRestaurant(restaurantId: string, clerkId: string) {
   const restaurant = await prisma.restaurant.findFirst({
     where: {
@@ -36,18 +70,7 @@ async function getOwnedRestaurant(restaurantId: string, clerkId: string) {
         clerkId,
       },
     },
-    include: {
-      subscription: true,
-      shortLink: true,
-      menuSections: {
-        orderBy: { displayOrder: "asc" },
-        include: {
-          items: {
-            orderBy: { displayOrder: "asc" },
-          },
-        },
-      },
-    },
+    include: restaurantDetailsInclude,
   });
 
   if (!restaurant) {
@@ -57,17 +80,35 @@ async function getOwnedRestaurant(restaurantId: string, clerkId: string) {
   return restaurant;
 }
 
-async function generateUniqueSlug(name: string) {
+async function generateUniqueSlug(name: string, excludeRestaurantId?: string) {
   const baseSlug = slugify(name);
   let slug = baseSlug;
   let count = 1;
 
-  while (await prisma.restaurant.findUnique({ where: { slug } })) {
+  while (true) {
+    const [restaurantMatch, aliasMatch] = await Promise.all([
+      prisma.restaurant.findUnique({
+        where: { slug },
+        select: { id: true },
+      }),
+      prisma.restaurantSlugAlias.findUnique({
+        where: { slug },
+        select: { restaurantId: true },
+      }),
+    ]);
+
+    const slugTakenByRestaurant =
+      restaurantMatch && restaurantMatch.id !== excludeRestaurantId;
+    const slugTakenByAlias =
+      aliasMatch && aliasMatch.restaurantId !== excludeRestaurantId;
+
+    if (!slugTakenByRestaurant && !slugTakenByAlias) {
+      return slug;
+    }
+
     count += 1;
     slug = `${baseSlug}-${count}`;
   }
-
-  return slug;
 }
 
 function applyEffectiveBillingState<T extends {
@@ -207,31 +248,36 @@ export const restaurantsRoute = new Hono<{
       const slug = c.req.param("slug");
       const authHeader = c.req.header("authorization");
       const auth = authHeader ? await resolveAuthHeader(authHeader).catch(() => null) : null;
+      const menuItemsWhere = auth ? undefined : { isAvailable: true };
 
-      const restaurant = await prisma.restaurant.findUnique({
-        where: { slug },
-        include: {
-          subscription: true,
-          shortLink: true,
-          menuSections: {
-            orderBy: { displayOrder: "asc" },
-            include: {
-              items: {
-                where: auth ? undefined : { isAvailable: true },
-                orderBy: { displayOrder: "asc" },
-                include: {
-                  images: {
-                    orderBy: { slot: "asc" },
-                  },
-                  dietaryTags: {
-                    include: { tag: true },
-                  },
-                },
-              },
+      const restaurantInclude = {
+        ...restaurantPublicInclude,
+        menuSections: {
+          ...restaurantPublicInclude.menuSections,
+          include: {
+            items: {
+              ...restaurantPublicInclude.menuSections.include.items,
+              where: menuItemsWhere,
             },
           },
         },
+      };
+
+      const primaryRestaurant = await prisma.restaurant.findUnique({
+        where: { slug },
+        include: restaurantInclude,
       });
+      const alias = primaryRestaurant
+        ? null
+        : await prisma.restaurantSlugAlias.findUnique({
+            where: { slug },
+            include: {
+              restaurant: {
+                include: restaurantInclude,
+              },
+            },
+          });
+      const restaurant = primaryRestaurant ?? alias?.restaurant ?? null;
 
       if (!restaurant) {
         throw new ApiError("Restaurant not found", 404);
@@ -267,14 +313,39 @@ export const restaurantsRoute = new Hono<{
       const restaurantId = c.req.param("id");
       const current = await getOwnedRestaurant(restaurantId, auth.clerkId);
       const data = updateRestaurantSchema.parse(await c.req.json());
+      const nextName = data.name?.trim() || current.name;
+      const nextSlug = await generateUniqueSlug(nextName, current.id);
 
-      const restaurant = await prisma.restaurant.update({
-        where: { id: current.id },
-        data,
-        include: {
-          subscription: true,
-          shortLink: true,
-        },
+      const restaurant = await prisma.$transaction(async (tx) => {
+        if (nextSlug !== current.slug) {
+          await tx.restaurantSlugAlias.deleteMany({
+            where: {
+              restaurantId: current.id,
+              slug: nextSlug,
+            },
+          });
+
+          await tx.restaurantSlugAlias.upsert({
+            where: { slug: current.slug },
+            update: {},
+            create: {
+              restaurantId: current.id,
+              slug: current.slug,
+            },
+          });
+        }
+
+        return tx.restaurant.update({
+          where: { id: current.id },
+          data: {
+            ...data,
+            slug: nextSlug,
+          },
+          include: {
+            subscription: true,
+            shortLink: true,
+          },
+        });
       });
 
       return c.json(withRestaurantEntitlements(restaurant));

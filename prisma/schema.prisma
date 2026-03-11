@@ -73,6 +73,7 @@ model Restaurant {
   shortLink    RestaurantShortLink?
   pageViews    PageView[]
   shortLinkClicks RestaurantShortLinkClick[]
+  slugAliases  RestaurantSlugAlias[]
 
   @@index([ownerId])
   @@map("restaurants")
@@ -186,6 +187,18 @@ model RestaurantDomain {
 
   @@index([restaurantId, status])
   @@map("restaurant_domains")
+}
+
+model RestaurantSlugAlias {
+  id           String   @id @default(cuid())
+  restaurantId String   @map("restaurant_id")
+  slug         String   @unique
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@index([restaurantId, createdAt])
+  @@map("restaurant_slug_aliases")
 }
 
 model RestaurantShortLink {
