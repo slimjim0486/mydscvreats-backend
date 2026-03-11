@@ -24,6 +24,13 @@ enum SubscriptionPlan {
   pro
 }
 
+enum DomainStatus {
+  pending
+  verifying
+  active
+  failed
+}
+
 model User {
   id        String   @id @default(cuid())
   clerkId   String   @unique @map("clerk_id")
@@ -62,6 +69,7 @@ model Restaurant {
   menuSections MenuSection[]
   menuItems    MenuItem[]
   subscription Subscription?
+  customDomain RestaurantDomain?
   pageViews    PageView[]
 
   @@index([ownerId])
@@ -149,6 +157,7 @@ model PageView {
   id           String   @id @default(cuid())
   restaurantId String   @map("restaurant_id")
   path         String
+  hostname     String?
   userAgent    String?  @map("user_agent")
   referrer     String?
   createdAt    DateTime @default(now()) @map("created_at")
@@ -157,6 +166,23 @@ model PageView {
 
   @@index([restaurantId, createdAt])
   @@map("page_views")
+}
+
+model RestaurantDomain {
+  id                 String       @id @default(cuid())
+  restaurantId       String       @unique @map("restaurant_id")
+  hostname           String       @unique
+  status             DomainStatus @default(pending)
+  verificationTarget String       @map("verification_target")
+  verifiedAt         DateTime?    @map("verified_at")
+  lastCheckedAt      DateTime?    @map("last_checked_at")
+  createdAt          DateTime     @default(now()) @map("created_at")
+  updatedAt          DateTime     @updatedAt @map("updated_at")
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@index([restaurantId, status])
+  @@map("restaurant_domains")
 }
 
 model DietaryTag {
