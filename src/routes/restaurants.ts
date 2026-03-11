@@ -1,13 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import {
-  getCustomDomainCnameTarget,
-  isAppHostname,
-  isValidCustomHostname,
-  normalizeHostname,
-  verifyCustomDomainHostname,
-} from "@/lib/domains";
-import {
   getEffectiveRestaurantBillingState,
   withRestaurantEntitlements,
 } from "@/lib/entitlements";
@@ -36,32 +29,6 @@ const updateRestaurantSchema = createRestaurantSchema.partial().extend({
   subscriptionStatus: z.enum(["trial", "active", "paused", "cancelled"]).optional(),
 });
 
-const customDomainSchema = z.object({
-  hostname: z.string().min(3),
-});
-
-const publicRestaurantInclude = (includeUnavailableItems: boolean) => ({
-  subscription: true,
-  customDomain: true,
-  menuSections: {
-    orderBy: { displayOrder: "asc" as const },
-    include: {
-      items: {
-        ...(includeUnavailableItems ? {} : { where: { isAvailable: true } }),
-        orderBy: { displayOrder: "asc" as const },
-        include: {
-          images: {
-            orderBy: { slot: "asc" as const },
-          },
-          dietaryTags: {
-            include: { tag: true },
-          },
-        },
-      },
-    },
-  },
-});
-
 async function getOwnedRestaurant(restaurantId: string, clerkId: string) {
   const restaurant = await prisma.restaurant.findFirst({
     where: {
@@ -72,7 +39,6 @@ async function getOwnedRestaurant(restaurantId: string, clerkId: string) {
     },
     include: {
       subscription: true,
-      customDomain: true,
       menuSections: {
         orderBy: { displayOrder: "asc" },
         include: {
@@ -102,56 +68,6 @@ async function generateUniqueSlug(name: string) {
   }
 
   return slug;
-}
-
-async function getOwnedRestaurantWithEntitlements(restaurantId: string, clerkId: string) {
-  const restaurant = await getOwnedRestaurant(restaurantId, clerkId);
-  return withRestaurantEntitlements(applyEffectiveBillingState(restaurant));
-}
-
-async function syncRestaurantCustomDomain(restaurantId: string, hostname: string) {
-  const normalizedHostname = normalizeHostname(hostname);
-  const verificationTarget = getCustomDomainCnameTarget();
-
-  const record = await prisma.restaurantDomain.upsert({
-    where: { restaurantId },
-    create: {
-      restaurantId,
-      hostname: normalizedHostname,
-      verificationTarget,
-      status: "verifying",
-      lastCheckedAt: new Date(),
-    },
-    update: {
-      hostname: normalizedHostname,
-      verificationTarget,
-      status: "verifying",
-      lastCheckedAt: new Date(),
-      verifiedAt: null,
-    },
-  });
-
-  const verification = await verifyCustomDomainHostname(normalizedHostname);
-
-  return prisma.restaurantDomain.update({
-    where: { id: record.id },
-    data: {
-      verificationTarget: verification.target,
-      status: verification.status,
-      lastCheckedAt: new Date(),
-      verifiedAt: verification.status === "active" ? new Date() : null,
-    },
-  });
-}
-
-function assertCustomDomainAccess(restaurant: {
-  entitlements: {
-    customDomainEnabled: boolean;
-  };
-}) {
-  if (!restaurant.entitlements.customDomainEnabled) {
-    throw new ApiError("Custom domains are available on the Pro plan.", 403);
-  }
 }
 
 function applyEffectiveBillingState<T extends {
@@ -197,7 +113,6 @@ export const restaurantsRoute = new Hono<{
       include: {
         menuItems: true,
         subscription: true,
-        customDomain: true,
       },
       orderBy: {
         updatedAt: "desc",
@@ -218,7 +133,6 @@ export const restaurantsRoute = new Hono<{
         where: { ownerId: user.id },
         include: {
           subscription: true,
-          customDomain: true,
           menuSections: {
             orderBy: { displayOrder: "asc" },
             include: {
@@ -277,117 +191,10 @@ export const restaurantsRoute = new Hono<{
         },
         include: {
           subscription: true,
-          customDomain: true,
         },
       });
 
       return c.json(withRestaurantEntitlements(restaurant), 201);
-    } catch (error) {
-      return errorResponse(c, error);
-    }
-  })
-  .get("/resolve/by-host", async (c) => {
-    try {
-      const hostname = normalizeHostname(c.req.query("hostname") ?? "");
-
-      if (!hostname || isAppHostname(hostname)) {
-        throw new ApiError("Restaurant not found", 404);
-      }
-
-      const restaurant = await prisma.restaurant.findFirst({
-        where: {
-          customDomain: {
-            is: {
-              hostname,
-              status: "active",
-            },
-          },
-        },
-        include: publicRestaurantInclude(false),
-      });
-
-      if (!restaurant) {
-        throw new ApiError("Restaurant not found", 404);
-      }
-
-      const hydratedRestaurant = withRestaurantEntitlements(applyEffectiveBillingState(restaurant));
-
-      if (!hydratedRestaurant.isPublished || !hydratedRestaurant.entitlements.customDomainEnabled) {
-        throw new ApiError("Restaurant not found", 404);
-      }
-
-      return c.json(hydratedRestaurant);
-    } catch (error) {
-      return errorResponse(c, error);
-    }
-  })
-  .post("/:id/custom-domain", requireAuth, async (c) => {
-    try {
-      const auth = c.get("auth");
-      const restaurantId = c.req.param("id");
-      const restaurant = await getOwnedRestaurantWithEntitlements(restaurantId, auth.clerkId);
-      assertCustomDomainAccess(restaurant);
-
-      const data = customDomainSchema.parse(await c.req.json());
-      const hostname = normalizeHostname(data.hostname);
-
-      if (!isValidCustomHostname(hostname)) {
-        throw new ApiError(
-          "Use a subdomain like menu.yourrestaurant.com that points to the mydscvr app host.",
-          400
-        );
-      }
-
-      const existing = await prisma.restaurantDomain.findUnique({
-        where: { hostname },
-      });
-
-      if (existing && existing.restaurantId !== restaurant.id) {
-        throw new ApiError("That hostname is already connected to another restaurant.", 409);
-      }
-
-      const customDomain = await syncRestaurantCustomDomain(restaurant.id, hostname);
-      return c.json(customDomain, 201);
-    } catch (error) {
-      return errorResponse(c, error);
-    }
-  })
-  .post("/:id/custom-domain/verify", requireAuth, async (c) => {
-    try {
-      const auth = c.get("auth");
-      const restaurantId = c.req.param("id");
-      const restaurant = await getOwnedRestaurantWithEntitlements(restaurantId, auth.clerkId);
-      assertCustomDomainAccess(restaurant);
-
-      if (!restaurant.customDomain?.hostname) {
-        throw new ApiError("No custom domain is connected yet.", 404);
-      }
-
-      const customDomain = await syncRestaurantCustomDomain(
-        restaurant.id,
-        restaurant.customDomain.hostname
-      );
-
-      return c.json(customDomain);
-    } catch (error) {
-      return errorResponse(c, error);
-    }
-  })
-  .delete("/:id/custom-domain", requireAuth, async (c) => {
-    try {
-      const auth = c.get("auth");
-      const restaurantId = c.req.param("id");
-      const restaurant = await getOwnedRestaurant(restaurantId, auth.clerkId);
-
-      if (!restaurant.customDomain) {
-        return c.body(null, 204);
-      }
-
-      await prisma.restaurantDomain.delete({
-        where: { restaurantId: restaurant.id },
-      });
-
-      return c.body(null, 204);
     } catch (error) {
       return errorResponse(c, error);
     }
@@ -400,7 +207,26 @@ export const restaurantsRoute = new Hono<{
 
       const restaurant = await prisma.restaurant.findUnique({
         where: { slug },
-        include: publicRestaurantInclude(Boolean(auth)),
+        include: {
+          subscription: true,
+          menuSections: {
+            orderBy: { displayOrder: "asc" },
+            include: {
+              items: {
+                where: auth ? undefined : { isAvailable: true },
+                orderBy: { displayOrder: "asc" },
+                include: {
+                  images: {
+                    orderBy: { slot: "asc" },
+                  },
+                  dietaryTags: {
+                    include: { tag: true },
+                  },
+                },
+              },
+            },
+          },
+        },
       });
 
       if (!restaurant) {

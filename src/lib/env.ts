@@ -27,7 +27,6 @@ const envSchema = z.object({
   RESEND_API_KEY: z.string().optional(),
   RESEND_FROM_EMAIL: z.string().email().optional(),
   FRONTEND_APP_URL: z.string().url().default("http://localhost:3000"),
-  CUSTOM_DOMAIN_CNAME_TARGET: z.string().optional(),
 });
 
 export const env = envSchema.parse(process.env);

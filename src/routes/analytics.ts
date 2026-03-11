@@ -9,7 +9,6 @@ import { requireAuth } from "@/middleware/auth";
 const pageViewSchema = z.object({
   restaurantId: z.string().cuid(),
   path: z.string().min(1),
-  hostname: z.string().nullable().optional(),
   referrer: z.string().nullable().optional(),
   userAgent: z.string().nullable().optional(),
 });
@@ -29,7 +28,6 @@ export const analyticsRoute = new Hono<{
         data: {
           restaurantId: data.restaurantId,
           path: data.path,
-          hostname: data.hostname ?? null,
           referrer: data.referrer ?? null,
           userAgent: data.userAgent ?? null,
         },
