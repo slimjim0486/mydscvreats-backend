@@ -61,14 +61,25 @@ export const analyticsRoute = new Hono<{
 
       const entitlements = getRestaurantEntitlements(restaurant);
       const includeTopPaths = entitlements.analyticsTier === "advanced";
+      const activeShortLink = await prisma.restaurantShortLink.findUnique({
+        where: { restaurantId },
+        select: {
+          id: true,
+          code: true,
+        },
+      });
 
-      const [totalViews, viewsToday, viewsThisWeek, topPaths] = await Promise.all([
+      const todayCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const weekCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      const emptyTopPaths: Array<{ path: string; _count: { path: number } }> = [];
+
+      const [totalViews, viewsToday, viewsThisWeek, topPaths, shortLinkTotalClicks, shortLinkClicksToday, shortLinkClicksThisWeek] = await Promise.all([
         prisma.pageView.count({ where: { restaurantId } }),
         prisma.pageView.count({
           where: {
             restaurantId,
             createdAt: {
-              gte: new Date(Date.now() - 24 * 60 * 60 * 1000),
+              gte: todayCutoff,
             },
           },
         }),
@@ -76,7 +87,7 @@ export const analyticsRoute = new Hono<{
           where: {
             restaurantId,
             createdAt: {
-              gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+              gte: weekCutoff,
             },
           },
         }),
@@ -94,7 +105,37 @@ export const analyticsRoute = new Hono<{
               },
               take: 5,
             })
-          : Promise.resolve([]),
+          : Promise.resolve(emptyTopPaths),
+        activeShortLink
+          ? prisma.restaurantShortLinkClick.count({
+              where: {
+                restaurantId,
+                shortLinkId: activeShortLink.id,
+              },
+            })
+          : Promise.resolve(0),
+        activeShortLink
+          ? prisma.restaurantShortLinkClick.count({
+              where: {
+                restaurantId,
+                shortLinkId: activeShortLink.id,
+                createdAt: {
+                  gte: todayCutoff,
+                },
+              },
+            })
+          : Promise.resolve(0),
+        activeShortLink
+          ? prisma.restaurantShortLinkClick.count({
+              where: {
+                restaurantId,
+                shortLinkId: activeShortLink.id,
+                createdAt: {
+                  gte: weekCutoff,
+                },
+              },
+            })
+          : Promise.resolve(0),
       ]);
 
       return c.json({
@@ -102,6 +143,14 @@ export const analyticsRoute = new Hono<{
         totalViews,
         viewsToday,
         viewsThisWeek,
+        shortLink: activeShortLink
+          ? {
+              code: activeShortLink.code,
+              totalClicks: shortLinkTotalClicks,
+              clicksToday: shortLinkClicksToday,
+              clicksThisWeek: shortLinkClicksThisWeek,
+            }
+          : null,
         topPaths: topPaths.map((entry) => ({
           path: entry.path,
           views: entry._count.path,

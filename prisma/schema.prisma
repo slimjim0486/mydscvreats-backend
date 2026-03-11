@@ -72,6 +72,7 @@ model Restaurant {
   customDomain RestaurantDomain?
   shortLink    RestaurantShortLink?
   pageViews    PageView[]
+  shortLinkClicks RestaurantShortLinkClick[]
 
   @@index([ownerId])
   @@map("restaurants")
@@ -98,6 +99,7 @@ model MenuItem {
   restaurantId        String   @map("restaurant_id")
   name                String
   description         String?
+  aiNotes             String?  @map("ai_notes")
   price               Decimal  @db.Decimal(10, 2)
   currency            String   @default("AED")
   imageUrl            String?  @map("image_url")
@@ -193,9 +195,40 @@ model RestaurantShortLink {
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
-  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  restaurant Restaurant                     @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  aliases    RestaurantShortLinkAlias[]
+  clicks     RestaurantShortLinkClick[]
 
   @@map("restaurant_short_links")
+}
+
+model RestaurantShortLinkAlias {
+  id          String   @id @default(cuid())
+  shortLinkId String   @map("short_link_id")
+  code        String   @unique
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  shortLink RestaurantShortLink @relation(fields: [shortLinkId], references: [id], onDelete: Cascade)
+
+  @@index([shortLinkId, createdAt])
+  @@map("restaurant_short_link_aliases")
+}
+
+model RestaurantShortLinkClick {
+  id           String   @id @default(cuid())
+  restaurantId String   @map("restaurant_id")
+  shortLinkId  String   @map("short_link_id")
+  code         String
+  userAgent    String?  @map("user_agent")
+  referrer     String?
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  restaurant Restaurant          @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  shortLink  RestaurantShortLink @relation(fields: [shortLinkId], references: [id], onDelete: Cascade)
+
+  @@index([restaurantId, createdAt])
+  @@index([shortLinkId, createdAt])
+  @@map("restaurant_short_link_clicks")
 }
 
 model DietaryTag {

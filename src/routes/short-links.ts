@@ -29,12 +29,18 @@ async function createUniqueShortCode(existingCode?: string | null) {
       continue;
     }
 
-    const match = await prisma.restaurantShortLink.findUnique({
-      where: { code },
-      select: { id: true },
-    });
+    const [primaryMatch, aliasMatch] = await Promise.all([
+      prisma.restaurantShortLink.findUnique({
+        where: { code },
+        select: { id: true },
+      }),
+      prisma.restaurantShortLinkAlias.findUnique({
+        where: { code },
+        select: { id: true },
+      }),
+    ]);
 
-    if (!match) {
+    if (!primaryMatch && !aliasMatch) {
       return code;
     }
   }
@@ -74,7 +80,7 @@ export const shortLinksRoute = new Hono<{
   .get("/resolve/:code", async (c) => {
     try {
       const code = c.req.param("code");
-      const shortLink = await prisma.restaurantShortLink.findUnique({
+      const primaryShortLink = await prisma.restaurantShortLink.findUnique({
         where: { code },
         include: {
           restaurant: {
@@ -84,6 +90,23 @@ export const shortLinksRoute = new Hono<{
           },
         },
       });
+      const alias = primaryShortLink
+        ? null
+        : await prisma.restaurantShortLinkAlias.findUnique({
+            where: { code },
+            include: {
+              shortLink: {
+                include: {
+                  restaurant: {
+                    include: {
+                      subscription: true,
+                    },
+                  },
+                },
+              },
+            },
+          });
+      const shortLink = primaryShortLink ?? alias?.shortLink ?? null;
 
       if (!shortLink) {
         throw new ApiError("Short link not found", 404);
@@ -94,6 +117,23 @@ export const shortLinksRoute = new Hono<{
       if (!restaurant.isPublished) {
         throw new ApiError("Short link not found", 404);
       }
+
+      await prisma.restaurantShortLinkClick.create({
+        data: {
+          restaurantId: shortLink.restaurantId,
+          shortLinkId: shortLink.id,
+          code: shortLink.code,
+          userAgent:
+            c.req.header("x-forwarded-user-agent") ??
+            c.req.header("user-agent") ??
+            null,
+          referrer:
+            c.req.header("x-forwarded-referrer") ??
+            c.req.header("referer") ??
+            c.req.header("referrer") ??
+            null,
+        },
+      });
 
       return c.json({
         slug: shortLink.restaurant.slug,
@@ -115,13 +155,26 @@ export const shortLinksRoute = new Hono<{
 
       const created = !restaurant.shortLink;
       const code = await createUniqueShortCode(restaurant.shortLink?.code);
-      const shortLink = await prisma.restaurantShortLink.upsert({
-        where: { restaurantId: restaurant.id },
-        update: { code },
-        create: {
-          restaurantId: restaurant.id,
-          code,
-        },
+      const shortLink = await prisma.$transaction(async (tx) => {
+        if (restaurant.shortLink) {
+          await tx.restaurantShortLinkAlias.upsert({
+            where: { code: restaurant.shortLink.code },
+            update: {},
+            create: {
+              shortLinkId: restaurant.shortLink.id,
+              code: restaurant.shortLink.code,
+            },
+          });
+        }
+
+        return tx.restaurantShortLink.upsert({
+          where: { restaurantId: restaurant.id },
+          update: { code },
+          create: {
+            restaurantId: restaurant.id,
+            code,
+          },
+        });
       });
 
       return c.json(shortLink, created ? 201 : 200);
