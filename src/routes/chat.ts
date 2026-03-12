@@ -10,6 +10,11 @@ import { env } from "@/lib/env";
 import { ApiError } from "@/lib/errors";
 import { errorResponse } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
+import {
+  assertAllowedPublicOrigin,
+  assertRateLimit,
+  getClientIp,
+} from "@/lib/public-request-guards";
 
 // ── Schema ────────────────────────────────────────────────────
 
@@ -59,7 +64,6 @@ type LoadedTag = {
 type LoadedItem = {
   name: string;
   description: string | null;
-  aiNotes: string | null;
   price: { toString(): string };
   dietaryTags: LoadedTag[];
 };
@@ -86,7 +90,6 @@ function buildSystemPrompt(restaurant: LoadedRestaurant) {
           [
             `- ${item.name} - AED ${formatPrice(item.price)}`,
             item.description ? `  ${item.description}` : null,
-            item.aiNotes ? `  [internal] ${item.aiNotes}` : null,
           ]
             .filter(Boolean)
             .join("\n")
@@ -403,6 +406,18 @@ const MAX_TOOL_ITERATIONS = 5;
 export const chatRoute = new Hono().post("/:restaurantId", async (c) => {
   try {
     const restaurantId = c.req.param("restaurantId");
+    const clientIp = getClientIp(c);
+    assertAllowedPublicOrigin(c);
+    assertRateLimit({
+      key: `public-chat:global:${clientIp}`,
+      limit: 60,
+      windowMs: 10 * 60_000,
+    });
+    assertRateLimit({
+      key: `public-chat:restaurant:${restaurantId}:${clientIp}`,
+      limit: 20,
+      windowMs: 10 * 60_000,
+    });
     const data = chatSchema.parse(await c.req.json());
 
     const restaurant = await prisma.restaurant.findUnique({
@@ -418,7 +433,6 @@ export const chatRoute = new Hono().post("/:restaurantId", async (c) => {
               select: {
                 name: true,
                 description: true,
-                aiNotes: true,
                 price: true,
                 dietaryTags: {
                   select: {

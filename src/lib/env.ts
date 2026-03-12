@@ -11,7 +11,7 @@ const envSchema = z.object({
   GOOGLE_IMAGE_ALLOW_FALLBACK: z.coerce.boolean().default(false),
   GOOGLE_IMAGE_FALLBACK_MODEL: z.string().optional(),
   NANOBANANA_API_KEY: z.string().optional(),
-  NANOBANANA_API_URL: z.string().url().optional(),
+  NANOBANANA_API_URL: z.preprocess((v) => (v === "" ? undefined : v), z.string().url().optional()),
   R2_ACCOUNT_ID: z.string().optional(),
   R2_ACCESS_KEY_ID: z.string().optional(),
   R2_SECRET_ACCESS_KEY: z.string().optional(),

@@ -1,9 +1,17 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { getRestaurantEntitlements } from "@/lib/entitlements";
+import {
+  getEffectiveRestaurantBillingState,
+  getRestaurantEntitlements,
+} from "@/lib/entitlements";
 import { ApiError } from "@/lib/errors";
 import { errorResponse } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
+import {
+  assertAllowedPublicOrigin,
+  consumeRateLimit,
+  getClientIp,
+} from "@/lib/public-request-guards";
 import { requireAuth } from "@/middleware/auth";
 
 const pageViewSchema = z.object({
@@ -23,7 +31,53 @@ export const analyticsRoute = new Hono<{
 }>()
   .post("/page-view", async (c) => {
     try {
+      const clientIp = getClientIp(c);
+      assertAllowedPublicOrigin(c);
+
       const data = pageViewSchema.parse(await c.req.json());
+      const restaurant = await prisma.restaurant.findUnique({
+        where: { id: data.restaurantId },
+        include: {
+          subscription: true,
+        },
+      });
+
+      if (!restaurant) {
+        throw new ApiError("Restaurant not found", 404);
+      }
+
+      const effectiveBillingState = getEffectiveRestaurantBillingState(restaurant);
+      if (!effectiveBillingState.isPublished) {
+        throw new ApiError("Restaurant not found", 404);
+      }
+
+      const allowedPaths = new Set([
+        `/${restaurant.slug}`,
+        `/embed/${restaurant.slug}`,
+      ]);
+
+      if (!allowedPaths.has(data.path)) {
+        throw new ApiError("Invalid analytics path", 400);
+      }
+
+      const globalLimit = consumeRateLimit({
+        key: `analytics:global:${clientIp}`,
+        limit: 120,
+        windowMs: 10 * 60_000,
+      });
+      if (!globalLimit.allowed) {
+        return c.json({ ok: true, rateLimited: true }, 202);
+      }
+
+      const perPageLimit = consumeRateLimit({
+        key: `analytics:page:${clientIp}:${data.restaurantId}:${data.path}`,
+        limit: 3,
+        windowMs: 30 * 60_000,
+      });
+      if (!perPageLimit.allowed) {
+        return c.json({ ok: true, rateLimited: true }, 202);
+      }
+
       await prisma.pageView.create({
         data: {
           restaurantId: data.restaurantId,
