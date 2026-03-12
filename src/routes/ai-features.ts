@@ -34,6 +34,9 @@ const promotionContentSchema = z.object({
   description: z.string().optional().nullable(),
   badgeLabel: z.string().optional().nullable(),
   terms: z.string().optional().nullable(),
+  promoPrice: z.string().optional().nullable(),
+  startsAt: z.string().optional().nullable(),
+  endsAt: z.string().optional().nullable(),
   tone: z.enum(["casual", "upscale", "playful", "formal"]).optional(),
 });
 
@@ -316,6 +319,9 @@ export const aiFeaturesRoute = new Hono<{
           description: data.description,
           badgeLabel: data.badgeLabel,
           terms: data.terms,
+          promoPrice: data.promoPrice,
+          startsAt: data.startsAt,
+          endsAt: data.endsAt,
           items,
         },
         {
