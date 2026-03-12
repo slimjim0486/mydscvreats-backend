@@ -23,6 +23,8 @@ const createRestaurantSchema = z.object({
   address: z.string().nullable().optional(),
   phone: z.string().nullable().optional(),
   website: z.string().nullable().optional(),
+  whatsappNumber: z.string().max(32).nullable().optional(),
+  whatsappPrefill: z.string().max(280).nullable().optional(),
   logoUrl: z.string().url().nullable().optional(),
   coverImageUrl: z.string().url().nullable().optional(),
   isPublished: z.boolean().optional(),
@@ -130,6 +132,11 @@ function applyEffectiveBillingState<T extends {
   };
 }
 
+function normalizeOptionalText(value: string | null | undefined) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
 export const restaurantsRoute = new Hono<{
   Variables: {
     auth: {
@@ -233,6 +240,8 @@ export const restaurantsRoute = new Hono<{
           address: data.address ?? null,
           phone: data.phone ?? null,
           website: data.website ?? null,
+          whatsappNumber: normalizeOptionalText(data.whatsappNumber),
+          whatsappPrefill: normalizeOptionalText(data.whatsappPrefill),
           logoUrl: data.logoUrl ?? null,
           coverImageUrl: data.coverImageUrl ?? null,
           isPublished: data.isPublished ?? false,
@@ -357,6 +366,14 @@ export const restaurantsRoute = new Hono<{
           where: { id: current.id },
           data: {
             ...data,
+            whatsappNumber:
+              data.whatsappNumber === undefined
+                ? undefined
+                : normalizeOptionalText(data.whatsappNumber),
+            whatsappPrefill:
+              data.whatsappPrefill === undefined
+                ? undefined
+                : normalizeOptionalText(data.whatsappPrefill),
             slug: nextSlug,
           },
           include: {

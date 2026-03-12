@@ -127,7 +127,7 @@ export const analyticsRoute = new Hono<{
       const weekCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
       const emptyTopPaths: Array<{ path: string; _count: { path: number } }> = [];
 
-      const [totalViews, viewsToday, viewsThisWeek, topPaths, shortLinkTotalClicks, shortLinkClicksToday, shortLinkClicksThisWeek] = await Promise.all([
+      const [totalViews, viewsToday, viewsThisWeek, topPaths, shortLinkTotalClicks, shortLinkClicksToday, shortLinkClicksThisWeek, whatsappTotalClicks, whatsappClicksToday, whatsappClicksThisWeek] = await Promise.all([
         prisma.pageView.count({ where: { restaurantId } }),
         prisma.pageView.count({
           where: {
@@ -190,6 +190,27 @@ export const analyticsRoute = new Hono<{
               },
             })
           : Promise.resolve(0),
+        prisma.whatsAppClick.count({
+          where: {
+            restaurantId,
+          },
+        }),
+        prisma.whatsAppClick.count({
+          where: {
+            restaurantId,
+            createdAt: {
+              gte: todayCutoff,
+            },
+          },
+        }),
+        prisma.whatsAppClick.count({
+          where: {
+            restaurantId,
+            createdAt: {
+              gte: weekCutoff,
+            },
+          },
+        }),
       ]);
 
       return c.json({
@@ -197,6 +218,13 @@ export const analyticsRoute = new Hono<{
         totalViews,
         viewsToday,
         viewsThisWeek,
+        whatsapp: restaurant.whatsappNumber
+          ? {
+              totalClicks: whatsappTotalClicks,
+              clicksToday: whatsappClicksToday,
+              clicksThisWeek: whatsappClicksThisWeek,
+            }
+          : null,
         shortLink: activeShortLink
           ? {
               code: activeShortLink.code,

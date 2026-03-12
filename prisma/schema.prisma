@@ -62,6 +62,8 @@ model Restaurant {
   address            String?
   phone              String?
   website            String?
+  whatsappNumber     String?            @map("whatsapp_number")
+  whatsappPrefill    String?            @map("whatsapp_prefill")
   logoUrl            String?            @map("logo_url")
   coverImageUrl      String?            @map("cover_image_url")
   isPublished        Boolean            @default(false) @map("is_published")
@@ -79,6 +81,7 @@ model Restaurant {
   shortLink    RestaurantShortLink?
   pageViews    PageView[]
   shortLinkClicks RestaurantShortLinkClick[]
+  whatsappClicks WhatsAppClick[]
   slugAliases  RestaurantSlugAlias[]
   promotions   Promotion[]
 
@@ -124,6 +127,7 @@ model MenuItem {
   images      MenuItemImage[]
   dietaryTags MenuItemDietaryTag[]
   promotionItems PromotionItem[]
+  whatsappClicks WhatsAppClick[]
 
   @@index([restaurantId, displayOrder])
   @@index([sectionId, displayOrder])
@@ -168,6 +172,7 @@ model Promotion {
 
   restaurant Restaurant      @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   items      PromotionItem[]
+  whatsappClicks WhatsAppClick[]
 
   @@index([restaurantId, displayOrder])
   @@index([restaurantId, isActive, startsAt, endsAt])
@@ -221,6 +226,28 @@ model PageView {
 
   @@index([restaurantId, createdAt])
   @@map("page_views")
+}
+
+model WhatsAppClick {
+  id          String    @id @default(cuid())
+  restaurantId String   @map("restaurant_id")
+  menuItemId  String?   @map("menu_item_id")
+  promotionId String?   @map("promotion_id")
+  source      String
+  path        String?
+  campaign    String?
+  referrer    String?
+  userAgent   String?   @map("user_agent")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  menuItem   MenuItem?  @relation(fields: [menuItemId], references: [id], onDelete: SetNull)
+  promotion  Promotion? @relation(fields: [promotionId], references: [id], onDelete: SetNull)
+
+  @@index([restaurantId, createdAt])
+  @@index([menuItemId, createdAt])
+  @@index([promotionId, createdAt])
+  @@map("whatsapp_clicks")
 }
 
 model RestaurantDomain {
