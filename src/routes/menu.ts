@@ -13,6 +13,7 @@ import {
   ensurePrimaryImageRecord,
   syncMenuItemImageSummary,
 } from "@/lib/menu-item-images";
+import { buildPromotionInclude } from "@/lib/promotions";
 import { prisma } from "@/lib/prisma";
 import { requireAuth, resolveAuthHeader } from "@/middleware/auth";
 
@@ -74,6 +75,33 @@ const selectImageSchema = z.object({
   imageId: z.string().cuid(),
 });
 
+const promotionTypeSchema = z.enum(["discounted_item", "deal", "combo"]);
+
+const promotionItemSchema = z.object({
+  menuItemId: z.string().cuid(),
+  role: z.string().max(40).optional(),
+  displayOrder: z.number().int().nonnegative().optional(),
+});
+
+const promotionSchema = z.object({
+  restaurantId: z.string().cuid(),
+  type: promotionTypeSchema,
+  title: z.string().min(2).max(120),
+  subtitle: z.string().max(120).nullable().optional(),
+  description: z.string().max(2000).nullable().optional(),
+  badgeLabel: z.string().max(40).nullable().optional(),
+  terms: z.string().max(280).nullable().optional(),
+  promoPrice: z.coerce.number().positive().nullable().optional(),
+  startsAt: z.string().datetime().nullable().optional(),
+  endsAt: z.string().datetime().nullable().optional(),
+  isActive: z.boolean().optional(),
+  isFeatured: z.boolean().optional(),
+  displayOrder: z.number().int().nonnegative().optional(),
+  items: z.array(promotionItemSchema).min(1),
+});
+
+const promotionInclude = buildPromotionInclude().promotions.include;
+
 async function getOwnedRestaurantSummary(restaurantId: string, clerkId: string) {
   const restaurant = await prisma.restaurant.findFirst({
     where: {
@@ -116,6 +144,131 @@ function normalizeOptionalText(value: string | null | undefined) {
 
 function hasMeaningfulText(value: string | null | undefined) {
   return Boolean(normalizeOptionalText(value));
+}
+
+function normalizeOptionalDateTime(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new ApiError("Invalid promotion schedule", 400);
+  }
+
+  return parsed;
+}
+
+async function deleteEmptyPromotions(
+  tx: Pick<typeof prisma, "promotion">,
+  restaurantId: string
+) {
+  await tx.promotion.deleteMany({
+    where: {
+      restaurantId,
+      items: {
+        none: {},
+      },
+    },
+  });
+}
+
+async function assertDiscountedPriceIntegrity(
+  menuItemId: string,
+  nextPrice: number
+) {
+  const conflictingPromotion = await prisma.promotionItem.findFirst({
+    where: {
+      menuItemId,
+      promotion: {
+        type: "discounted_item",
+      },
+    },
+    include: {
+      promotion: {
+        select: {
+          title: true,
+          promoPrice: true,
+        },
+      },
+    },
+  });
+
+  if (
+    conflictingPromotion?.promotion.promoPrice !== null &&
+    conflictingPromotion?.promotion.promoPrice !== undefined &&
+    Number(conflictingPromotion.promotion.promoPrice) >= nextPrice
+  ) {
+    throw new ApiError(
+      `Update the "${conflictingPromotion.promotion.title}" offer before lowering this dish price.`,
+      400
+    );
+  }
+}
+
+async function validatePromotionPayload(
+  restaurantId: string,
+  data: z.infer<typeof promotionSchema>
+) {
+  const uniqueItemIds = [...new Set(data.items.map((item) => item.menuItemId))];
+  const menuItems = await prisma.menuItem.findMany({
+    where: {
+      restaurantId,
+      id: {
+        in: uniqueItemIds,
+      },
+    },
+    select: {
+      id: true,
+      name: true,
+      price: true,
+    },
+  });
+
+  if (menuItems.length !== uniqueItemIds.length) {
+    throw new ApiError("One or more linked dishes were not found", 404);
+  }
+
+  const startsAt = normalizeOptionalDateTime(data.startsAt);
+  const endsAt = normalizeOptionalDateTime(data.endsAt);
+
+  if (startsAt && endsAt && startsAt > endsAt) {
+    throw new ApiError("Offer end time must be after the start time", 400);
+  }
+
+  if (data.type === "discounted_item") {
+    if (uniqueItemIds.length !== 1) {
+      throw new ApiError("Discounted item offers must target exactly one dish", 400);
+    }
+
+    if (data.promoPrice === null || data.promoPrice === undefined) {
+      throw new ApiError("Discounted item offers need a promo price", 400);
+    }
+
+    const baseItem = menuItems[0];
+    if (data.promoPrice >= Number(baseItem.price)) {
+      throw new ApiError(
+        `Promo price must be lower than ${baseItem.name}'s regular price`,
+        400
+      );
+    }
+  }
+
+  if (data.type === "combo") {
+    if (uniqueItemIds.length < 2) {
+      throw new ApiError("Combos must include at least two dishes", 400);
+    }
+
+    if (data.promoPrice === null || data.promoPrice === undefined) {
+      throw new ApiError("Combos need a combo price", 400);
+    }
+  }
+
+  return {
+    menuItems,
+    startsAt,
+    endsAt,
+  };
 }
 
 export const menuRoute = new Hono<{
@@ -216,6 +369,137 @@ export const menuRoute = new Hono<{
       return errorResponse(c, error);
     }
   })
+  .post("/promotions", requireAuth, async (c) => {
+    try {
+      const auth = c.get("auth");
+      const data = promotionSchema.parse(await c.req.json());
+      await assertOwnership(data.restaurantId, auth.clerkId);
+      const { startsAt, endsAt } = await validatePromotionPayload(data.restaurantId, data);
+
+      const promotionCount = await prisma.promotion.count({
+        where: { restaurantId: data.restaurantId },
+      });
+
+      const promotion = await prisma.promotion.create({
+        data: {
+          restaurantId: data.restaurantId,
+          type: data.type,
+          title: data.title.trim(),
+          subtitle: normalizeOptionalText(data.subtitle),
+          description: normalizeOptionalText(data.description),
+          badgeLabel: normalizeOptionalText(data.badgeLabel),
+          terms: normalizeOptionalText(data.terms),
+          promoPrice: data.promoPrice ?? null,
+          startsAt,
+          endsAt,
+          isActive: data.isActive ?? true,
+          isFeatured: data.isFeatured ?? true,
+          displayOrder: data.displayOrder ?? promotionCount,
+          items: {
+            create: data.items.map((item, index) => ({
+              menuItemId: item.menuItemId,
+              role: normalizeOptionalText(item.role) ?? "included",
+              displayOrder: item.displayOrder ?? index,
+            })),
+          },
+        },
+        include: promotionInclude,
+      });
+
+      return c.json(promotion, 201);
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  })
+  .put("/promotions/:id", requireAuth, async (c) => {
+    try {
+      const auth = c.get("auth");
+      const promotionId = c.req.param("id");
+      const current = await prisma.promotion.findUnique({
+        where: { id: promotionId },
+        include: {
+          restaurant: {
+            include: {
+              owner: true,
+            },
+          },
+        },
+      });
+
+      if (!current || current.restaurant.owner.clerkId !== auth.clerkId) {
+        throw new ApiError("Offer not found", 404);
+      }
+
+      const data = promotionSchema.parse(await c.req.json());
+      if (data.restaurantId !== current.restaurantId) {
+        throw new ApiError("Offer restaurant mismatch", 400);
+      }
+
+      const { startsAt, endsAt } = await validatePromotionPayload(data.restaurantId, data);
+
+      const updated = await prisma.$transaction(async (tx) => {
+        await tx.promotionItem.deleteMany({
+          where: { promotionId: current.id },
+        });
+
+        return tx.promotion.update({
+          where: { id: current.id },
+          data: {
+            type: data.type,
+            title: data.title.trim(),
+            subtitle: normalizeOptionalText(data.subtitle),
+            description: normalizeOptionalText(data.description),
+            badgeLabel: normalizeOptionalText(data.badgeLabel),
+            terms: normalizeOptionalText(data.terms),
+            promoPrice: data.promoPrice ?? null,
+            startsAt,
+            endsAt,
+            isActive: data.isActive ?? true,
+            isFeatured: data.isFeatured ?? true,
+            displayOrder: data.displayOrder ?? current.displayOrder,
+            items: {
+              create: data.items.map((item, index) => ({
+                menuItemId: item.menuItemId,
+                role: normalizeOptionalText(item.role) ?? "included",
+                displayOrder: item.displayOrder ?? index,
+              })),
+            },
+          },
+          include: promotionInclude,
+        });
+      });
+
+      return c.json(updated);
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  })
+  .delete("/promotions/:id", requireAuth, async (c) => {
+    try {
+      const auth = c.get("auth");
+      const promotion = await prisma.promotion.findUnique({
+        where: { id: c.req.param("id") },
+        include: {
+          restaurant: {
+            include: {
+              owner: true,
+            },
+          },
+        },
+      });
+
+      if (!promotion || promotion.restaurant.owner.clerkId !== auth.clerkId) {
+        throw new ApiError("Offer not found", 404);
+      }
+
+      await prisma.promotion.delete({
+        where: { id: promotion.id },
+      });
+      return c.body(null, 204);
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  })
   .post("/sections", requireAuth, async (c) => {
     try {
       const auth = c.get("auth");
@@ -270,7 +554,10 @@ export const menuRoute = new Hono<{
         throw new ApiError("Section not found", 404);
       }
 
-      await prisma.menuSection.delete({ where: { id: section.id } });
+      await prisma.$transaction(async (tx) => {
+        await tx.menuSection.delete({ where: { id: section.id } });
+        await deleteEmptyPromotions(tx, section.restaurantId);
+      });
       return c.body(null, 204);
     } catch (error) {
       return errorResponse(c, error);
@@ -326,6 +613,9 @@ export const menuRoute = new Hono<{
       if (hasMeaningfulText(data.aiNotes) && !entitlements.menuAssistantEnabled) {
         throw new ApiError(getMenuAssistantUpgradeMessage(), 403);
       }
+      if (data.price !== undefined) {
+        await assertDiscountedPriceIntegrity(item.id, data.price);
+      }
 
       const updated = await prisma.menuItem.update({
         where: { id: item.id },
@@ -355,7 +645,10 @@ export const menuRoute = new Hono<{
         throw new ApiError("Menu item not found", 404);
       }
 
-      await prisma.menuItem.delete({ where: { id: item.id } });
+      await prisma.$transaction(async (tx) => {
+        await tx.menuItem.delete({ where: { id: item.id } });
+        await deleteEmptyPromotions(tx, item.restaurantId);
+      });
       return c.body(null, 204);
     } catch (error) {
       return errorResponse(c, error);
@@ -426,6 +719,9 @@ export const menuRoute = new Hono<{
       assertWithinMenuItemLimit(entitlements.menuItemLimit, totalImportedItems);
 
       await prisma.$transaction(async (tx) => {
+        await tx.promotion.deleteMany({
+          where: { restaurantId: data.restaurantId },
+        });
         await tx.menuItem.deleteMany({
           where: { restaurantId: data.restaurantId },
         });

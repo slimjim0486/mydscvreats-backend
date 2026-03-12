@@ -31,6 +31,12 @@ enum DomainStatus {
   failed
 }
 
+enum PromotionType {
+  discounted_item
+  deal
+  combo
+}
+
 model User {
   id        String   @id @default(cuid())
   clerkId   String   @unique @map("clerk_id")
@@ -74,6 +80,7 @@ model Restaurant {
   pageViews    PageView[]
   shortLinkClicks RestaurantShortLinkClick[]
   slugAliases  RestaurantSlugAlias[]
+  promotions   Promotion[]
 
   @@index([ownerId])
   @@map("restaurants")
@@ -116,6 +123,7 @@ model MenuItem {
   restaurant  Restaurant           @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   images      MenuItemImage[]
   dietaryTags MenuItemDietaryTag[]
+  promotionItems PromotionItem[]
 
   @@index([restaurantId, displayOrder])
   @@index([sectionId, displayOrder])
@@ -138,6 +146,49 @@ model MenuItemImage {
   @@unique([menuItemId, slot])
   @@index([menuItemId, createdAt])
   @@map("menu_item_images")
+}
+
+model Promotion {
+  id          String        @id @default(cuid())
+  restaurantId String       @map("restaurant_id")
+  type        PromotionType
+  title       String
+  subtitle    String?
+  description String?
+  badgeLabel  String?       @map("badge_label")
+  terms       String?
+  promoPrice  Decimal?      @map("promo_price") @db.Decimal(10, 2)
+  startsAt    DateTime?     @map("starts_at")
+  endsAt      DateTime?     @map("ends_at")
+  isActive    Boolean       @default(true) @map("is_active")
+  isFeatured  Boolean       @default(true) @map("is_featured")
+  displayOrder Int          @default(0) @map("display_order")
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+
+  restaurant Restaurant      @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  items      PromotionItem[]
+
+  @@index([restaurantId, displayOrder])
+  @@index([restaurantId, isActive, startsAt, endsAt])
+  @@map("promotions")
+}
+
+model PromotionItem {
+  id          String   @id @default(cuid())
+  promotionId String   @map("promotion_id")
+  menuItemId  String   @map("menu_item_id")
+  role        String   @default("included")
+  displayOrder Int     @default(0) @map("display_order")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  promotion Promotion @relation(fields: [promotionId], references: [id], onDelete: Cascade)
+  menuItem   MenuItem  @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+
+  @@unique([promotionId, menuItemId])
+  @@index([menuItemId, displayOrder])
+  @@index([promotionId, displayOrder])
+  @@map("promotion_items")
 }
 
 model Subscription {

@@ -6,6 +6,7 @@ import {
 } from "@/lib/entitlements";
 import { ApiError } from "@/lib/errors";
 import { errorResponse } from "@/lib/http";
+import { buildLivePromotionWhere, buildPromotionInclude } from "@/lib/promotions";
 import { prisma } from "@/lib/prisma";
 import { slugify } from "@/lib/slug";
 import { getCurrentUser, requireAuth, resolveAuthHeader } from "@/middleware/auth";
@@ -42,6 +43,7 @@ const restaurantDetailsInclude = {
       },
     },
   },
+  ...buildPromotionInclude(),
 };
 
 const restaurantPublicInclude = {
@@ -63,6 +65,7 @@ const restaurantPublicInclude = {
       },
     },
   },
+  ...buildPromotionInclude({ availableOnly: true }),
 };
 
 async function getOwnedRestaurant(restaurantId: string, clerkId: string) {
@@ -195,6 +198,7 @@ export const restaurantsRoute = new Hono<{
               },
             },
           },
+          ...buildPromotionInclude(),
         },
       });
 
@@ -252,9 +256,14 @@ export const restaurantsRoute = new Hono<{
       const authHeader = c.req.header("authorization");
       const auth = authHeader ? await resolveAuthHeader(authHeader).catch(() => null) : null;
       const menuItemsWhere = auth ? undefined : { isAvailable: true };
+      const livePromotionWhere = auth ? undefined : buildLivePromotionWhere(new Date());
 
       const restaurantInclude = {
         ...restaurantPublicInclude,
+        promotions: {
+          ...restaurantPublicInclude.promotions,
+          ...(livePromotionWhere ? { where: livePromotionWhere } : {}),
+        },
         menuSections: {
           ...restaurantPublicInclude.menuSections,
           include: {
