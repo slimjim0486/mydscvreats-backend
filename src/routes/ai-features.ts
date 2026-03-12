@@ -9,6 +9,7 @@ import { requireAuth } from "@/middleware/auth";
 import {
   enhanceSingleDescription,
   enhanceBulkDescriptions,
+  suggestPromotionContent,
 } from "@/services/description-writer";
 import { suggestDietaryTags } from "@/services/dietary-tagger";
 import { analyzeMenu } from "@/services/menu-analyzer";
@@ -21,6 +22,18 @@ const enhanceSchema = z.object({
 const bulkEnhanceSchema = z.object({
   restaurantId: z.string().min(1),
   mode: z.enum(["missing", "weak", "all"]),
+  tone: z.enum(["casual", "upscale", "playful", "formal"]).optional(),
+});
+
+const promotionContentSchema = z.object({
+  restaurantId: z.string().min(1),
+  type: z.enum(["discounted_item", "deal", "combo"]),
+  itemIds: z.array(z.string().min(1)).min(1),
+  title: z.string().optional().nullable(),
+  subtitle: z.string().optional().nullable(),
+  description: z.string().optional().nullable(),
+  badgeLabel: z.string().optional().nullable(),
+  terms: z.string().optional().nullable(),
   tone: z.enum(["casual", "upscale", "playful", "formal"]).optional(),
 });
 
@@ -240,6 +253,94 @@ export const aiFeaturesRoute = new Hono<{
       return c.json({
         suggestions: result.suggestions,
         count: Object.keys(result.suggestions).length,
+      });
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  })
+
+  .post("/suggest-promotion-content", requireAuth, async (c) => {
+    try {
+      const auth = c.get("auth");
+      const data = promotionContentSchema.parse(await c.req.json());
+      const restaurant = await getOwnedRestaurant(data.restaurantId, auth.clerkId);
+      const entitlements = getRestaurantEntitlements(restaurant);
+
+      const limit = await checkAiLimit(
+        restaurant.id,
+        "description_enhance",
+        entitlements.aiDescriptionLimit
+      );
+
+      if (!limit.allowed) {
+        throw new ApiError(
+          `Description enhancement limit reached (${limit.used}/${entitlements.aiDescriptionLimit} this month). Upgrade for more.`,
+          403
+        );
+      }
+
+      const sections = await prisma.menuSection.findMany({
+        where: { restaurantId: restaurant.id },
+        include: {
+          items: {
+            where: {
+              id: {
+                in: data.itemIds,
+              },
+            },
+            orderBy: { displayOrder: "asc" },
+          },
+        },
+        orderBy: { displayOrder: "asc" },
+      });
+
+      const items = sections.flatMap((section) =>
+        section.items.map((item) => ({
+          id: item.id,
+          name: item.name,
+          description: item.description,
+          price: item.price.toString(),
+          sectionName: section.name,
+        }))
+      );
+
+      if (items.length !== new Set(data.itemIds).size) {
+        throw new ApiError("One or more selected dishes were not found", 404);
+      }
+
+      const result = await suggestPromotionContent(
+        {
+          type: data.type,
+          title: data.title,
+          subtitle: data.subtitle,
+          description: data.description,
+          badgeLabel: data.badgeLabel,
+          terms: data.terms,
+          items,
+        },
+        {
+          name: restaurant.name,
+          cuisineType: restaurant.cuisineType,
+          location: restaurant.location,
+        },
+        data.tone
+      );
+
+      await logAiUsage(
+        restaurant.id,
+        "description_enhance",
+        result.tokensIn,
+        result.tokensOut
+      );
+
+      const usage = await getAiUsageSummary(restaurant.id, "description_enhance");
+
+      return c.json({
+        suggestion: result.content,
+        usage: {
+          used: usage.used,
+          limit: entitlements.aiDescriptionLimit,
+        },
       });
     } catch (error) {
       return errorResponse(c, error);
