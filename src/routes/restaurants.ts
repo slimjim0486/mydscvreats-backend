@@ -10,11 +10,14 @@ import { prisma } from "@/lib/prisma";
 import { slugify } from "@/lib/slug";
 import { getCurrentUser, requireAuth, resolveAuthHeader } from "@/middleware/auth";
 
+const restaurantThemeKeys = ["saffron", "midnight", "rose", "noir", "aegean", "neon"] as const;
+const premiumThemeKeys = new Set(["noir", "aegean", "neon"]);
+
 const createRestaurantSchema = z.object({
   name: z.string().min(2),
   description: z.string().nullable().optional(),
   cuisineType: z.string().nullable().optional(),
-  themeKey: z.enum(["saffron", "midnight", "rose"]).nullable().optional(),
+  themeKey: z.enum(restaurantThemeKeys).nullable().optional(),
   location: z.string().nullable().optional(),
   address: z.string().nullable().optional(),
   phone: z.string().nullable().optional(),
@@ -313,6 +316,12 @@ export const restaurantsRoute = new Hono<{
       const restaurantId = c.req.param("id");
       const current = await getOwnedRestaurant(restaurantId, auth.clerkId);
       const data = updateRestaurantSchema.parse(await c.req.json());
+      const isPro = current.subscription?.plan === "pro" && current.subscription?.status !== "cancelled";
+
+      if (data.themeKey && premiumThemeKeys.has(data.themeKey) && !isPro) {
+        throw new ApiError("Premium themes require a Pro plan", 403);
+      }
+
       const nextName = data.name?.trim() || current.name;
       const nextSlug = await generateUniqueSlug(nextName, current.id);
 
