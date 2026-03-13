@@ -297,6 +297,9 @@ export const menuRoute = new Hono<{
                   dietaryTags: {
                     include: { tag: true },
                   },
+                  badges: {
+                    include: { badge: true },
+                  },
                 },
               },
             },

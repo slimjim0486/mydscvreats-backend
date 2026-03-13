@@ -63,6 +63,9 @@ const restaurantPublicInclude = {
           dietaryTags: {
             include: { tag: true },
           },
+          badges: {
+            include: { badge: true },
+          },
         },
       },
     },
@@ -200,6 +203,9 @@ export const restaurantsRoute = new Hono<{
                   },
                   dietaryTags: {
                     include: { tag: true },
+                  },
+                  badges: {
+                    include: { badge: true },
                   },
                 },
               },

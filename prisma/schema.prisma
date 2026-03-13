@@ -127,6 +127,7 @@ model MenuItem {
   restaurant  Restaurant           @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   images      MenuItemImage[]
   dietaryTags MenuItemDietaryTag[]
+  badges      MenuItemBadge[]
   promotionItems PromotionItem[]
   whatsappClicks WhatsAppClick[]
   likes       MenuItemLike[]
@@ -339,6 +340,34 @@ model RestaurantShortLinkClick {
   @@index([restaurantId, createdAt])
   @@index([shortLinkId, createdAt])
   @@map("restaurant_short_link_clicks")
+}
+
+model BadgeType {
+  id       String          @id @default(cuid())
+  key      String          @unique
+  label    String
+  icon     String?
+  color    String          @default("#F2E2B9")
+  textColor String         @default("#7A5211") @map("text_color")
+  category String          @default("promotion")
+  displayOrder Int         @default(0) @map("display_order")
+  menuItemBadges MenuItemBadge[]
+
+  @@map("badge_types")
+}
+
+model MenuItemBadge {
+  id         String   @id @default(cuid())
+  menuItemId String   @map("menu_item_id")
+  badgeId    String   @map("badge_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  menuItem MenuItem  @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  badge    BadgeType @relation(fields: [badgeId], references: [id], onDelete: Cascade)
+
+  @@unique([menuItemId, badgeId])
+  @@index([menuItemId])
+  @@map("menu_item_badges")
 }
 
 model DietaryTag {
