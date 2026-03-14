@@ -80,6 +80,7 @@ model Restaurant {
   customDomain RestaurantDomain?
   shortLink    RestaurantShortLink?
   pageViews    PageView[]
+  brandingClicks BrandingClick[]
   shortLinkClicks RestaurantShortLinkClick[]
   whatsappClicks WhatsAppClick[]
   menuItemLikes MenuItemLike[]
@@ -229,6 +230,20 @@ model PageView {
 
   @@index([restaurantId, createdAt])
   @@map("page_views")
+}
+
+model BrandingClick {
+  id           String   @id @default(cuid())
+  restaurantId String   @map("restaurant_id")
+  path         String?
+  referrer     String?
+  userAgent    String?  @map("user_agent")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@index([restaurantId, createdAt])
+  @@map("branding_clicks")
 }
 
 model MenuItemLike {

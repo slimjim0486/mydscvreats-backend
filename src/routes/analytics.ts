@@ -21,6 +21,13 @@ const pageViewSchema = z.object({
   userAgent: z.string().nullable().optional(),
 });
 
+const brandingClickSchema = z.object({
+  restaurantId: z.string().cuid(),
+  path: z.string().min(1).optional(),
+  referrer: z.string().nullable().optional(),
+  userAgent: z.string().nullable().optional(),
+});
+
 const menuItemLikeSchema = z.object({
   restaurantId: z.string().cuid(),
   menuItemId: z.string().cuid(),
@@ -90,6 +97,58 @@ export const analyticsRoute = new Hono<{
         data: {
           restaurantId: data.restaurantId,
           path: data.path,
+          referrer: data.referrer ?? null,
+          userAgent: data.userAgent ?? null,
+        },
+      });
+
+      return c.json({ ok: true }, 201);
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  })
+  .post("/branding-click", async (c) => {
+    try {
+      const clientIp = getClientIp(c);
+      assertAllowedPublicOrigin(c);
+
+      const data = brandingClickSchema.parse(await c.req.json());
+      const restaurant = await prisma.restaurant.findUnique({
+        where: { id: data.restaurantId },
+        include: { subscription: true },
+      });
+
+      if (!restaurant) {
+        throw new ApiError("Restaurant not found", 404);
+      }
+
+      const effectiveBillingState = getEffectiveRestaurantBillingState(restaurant);
+      if (!effectiveBillingState.isPublished) {
+        throw new ApiError("Restaurant not found", 404);
+      }
+
+      const globalLimit = consumeRateLimit({
+        key: `analytics:branding:global:${clientIp}`,
+        limit: 30,
+        windowMs: 10 * 60_000,
+      });
+      if (!globalLimit.allowed) {
+        return c.json({ ok: true, rateLimited: true }, 202);
+      }
+
+      const perRestaurantLimit = consumeRateLimit({
+        key: `analytics:branding:${clientIp}:${data.restaurantId}`,
+        limit: 1,
+        windowMs: 30 * 60_000,
+      });
+      if (!perRestaurantLimit.allowed) {
+        return c.json({ ok: true, rateLimited: true }, 202);
+      }
+
+      await prisma.brandingClick.create({
+        data: {
+          restaurantId: data.restaurantId,
+          path: data.path ?? null,
           referrer: data.referrer ?? null,
           userAgent: data.userAgent ?? null,
         },
@@ -230,6 +289,8 @@ export const analyticsRoute = new Hono<{
         menuItemLikesToday,
         menuItemLikesThisWeek,
         topLikedItemGroups,
+        brandingTotalClicks,
+        brandingClicksThisWeek,
       ] = await Promise.all([
         prisma.pageView.count({ where: { restaurantId } }),
         prisma.pageView.count({
@@ -350,6 +411,10 @@ export const analyticsRoute = new Hono<{
           },
           take: 5,
         }).catch(() => emptyTopLikedItems),
+        prisma.brandingClick.count({ where: { restaurantId } }),
+        prisma.brandingClick.count({
+          where: { restaurantId, createdAt: { gte: weekCutoff } },
+        }),
       ]);
 
       const topLikedItems =
@@ -415,6 +480,10 @@ export const analyticsRoute = new Hono<{
           path: entry.path,
           views: entry._count.path,
         })),
+        branding: {
+          totalClicks: brandingTotalClicks,
+          clicksThisWeek: brandingClicksThisWeek,
+        },
       });
     } catch (error) {
       return errorResponse(c, error);
