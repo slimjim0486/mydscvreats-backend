@@ -197,7 +197,13 @@ model MenuSourceImageCandidate {
   id                 String                      @id @default(cuid())
   restaurantId       String                      @map("restaurant_id")
   imageUrl           String                      @map("image_url")
+  sourcePageImageUrl String?                     @map("source_page_image_url")
   sourcePageNumber   Int                         @map("source_page_number")
+  cropX              Float?                      @map("crop_x")
+  cropY              Float?                      @map("crop_y")
+  cropWidth          Float?                      @map("crop_width")
+  cropHeight         Float?                      @map("crop_height")
+  textOverlapScore   Float?                      @map("text_overlap_score")
   confidence         Float
   note               String?
   reviewStatus       MenuSourceImageReviewStatus @default(pending) @map("review_status")

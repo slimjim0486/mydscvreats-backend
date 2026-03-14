@@ -438,6 +438,7 @@ export const menuRoute = new Hono<{
           restaurant: {
             include: {
               owner: true,
+              subscription: true,
             },
           },
         },
@@ -685,6 +686,7 @@ export const menuRoute = new Hono<{
           restaurant: {
             include: {
               owner: true,
+              subscription: true,
             },
           },
           images: {
@@ -748,8 +750,18 @@ export const menuRoute = new Hono<{
         throw new ApiError("Menu item not found", 404);
       }
 
+      const entitlements = getRestaurantEntitlements(item.restaurant);
+
       if (!data.contentType.startsWith("image/")) {
         throw new ApiError("Only image uploads are supported for menu item photos", 400);
+      }
+
+      if (data.originType === "menu_source_upload" && !entitlements.sourcePhotoReviewEnabled) {
+        throw new ApiError("Imported menu photo review is not enabled for this plan", 403);
+      }
+
+      if ((data.originType === undefined || data.originType === "owner_upload") && !entitlements.sourcePhotoImportEnabled) {
+        throw new ApiError("Owner photo uploads are not enabled for this plan", 403);
       }
 
       const prepared = await prisma.$transaction((tx) => ensurePrimaryImageRecord(tx, item.id));

@@ -1,26 +1,52 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { MenuSourceImageReviewStatus } from "@prisma/client";
-import { getNextImageSlot, syncMenuItemImageSummary } from "@/lib/menu-item-images";
+import { getRestaurantEntitlements } from "@/lib/entitlements";
+import {
+  getNextHiddenImageSlot,
+  getNextImageSlot,
+  syncMenuItemImageSummary,
+} from "@/lib/menu-item-images";
 import { prisma } from "@/lib/prisma";
 import { ApiError } from "@/lib/errors";
 import { errorResponse } from "@/lib/http";
 import { requireAuth } from "@/middleware/auth";
 import { uploadBuffer } from "@/services/r2";
+import { createTruthPreservingEditFromUrl } from "@/services/truth-preserving-image";
 
 const createCandidateSchema = z.object({
   restaurantId: z.string().cuid(),
   filename: z.string().min(1),
   contentType: z.string().startsWith("image/"),
   base64: z.string().min(1),
+  sourcePageFilename: z.string().min(1),
+  sourcePageContentType: z.string().startsWith("image/"),
+  sourcePageBase64: z.string().min(1),
   sourcePageNumber: z.number().int().positive(),
+  cropX: z.number().min(0).max(1),
+  cropY: z.number().min(0).max(1),
+  cropWidth: z.number().min(0.05).max(1),
+  cropHeight: z.number().min(0.05).max(1),
+  textOverlapScore: z.number().min(0).max(1).optional(),
   confidence: z.number().min(0).max(1),
   note: z.string().max(280).optional(),
   suggestedMenuItemId: z.string().cuid().optional().nullable(),
 });
 
+const cropUpdateSchema = z.object({
+  filename: z.string().min(1),
+  contentType: z.string().startsWith("image/"),
+  base64: z.string().min(1),
+  cropX: z.number().min(0).max(1),
+  cropY: z.number().min(0).max(1),
+  cropWidth: z.number().min(0.05).max(1),
+  cropHeight: z.number().min(0.05).max(1),
+  textOverlapScore: z.number().min(0).max(1).optional(),
+});
+
 const updateCandidateSchema = z.object({
-  assignedMenuItemId: z.string().cuid().nullable(),
+  assignedMenuItemId: z.string().cuid().nullable().optional(),
+  crop: cropUpdateSchema.optional(),
 });
 
 const bulkConfirmSchema = z.object({
@@ -32,6 +58,9 @@ async function assertRestaurantOwnership(restaurantId: string, clerkId: string) 
     where: {
       id: restaurantId,
       owner: { clerkId },
+    },
+    include: {
+      subscription: true,
     },
   });
 
@@ -75,6 +104,14 @@ async function confirmCandidateById(candidateId: string, clerkId: string) {
     throw new ApiError("Choose a dish before confirming this imported photo", 400);
   }
 
+  const enhanced = await createTruthPreservingEditFromUrl(candidate.imageUrl);
+  const enhancedUpload = await uploadBuffer({
+    buffer: enhanced.buffer,
+    contentType: enhanced.contentType,
+    folder: `restaurants/${candidate.restaurantId}/menu-items/enhanced`,
+    key: `restaurants/${candidate.restaurantId}/menu-items/enhanced/${Date.now()}-${candidate.id}.${enhanced.extension}`,
+  });
+
   return prisma.$transaction(async (tx) => {
     const item = await tx.menuItem.findUnique({
       where: { id: targetMenuItemId },
@@ -94,16 +131,34 @@ async function confirmCandidateById(candidateId: string, clerkId: string) {
       throw new ApiError("This dish already has 3 images. Remove one before confirming another.", 400);
     }
 
+    const helperSlot = getNextHiddenImageSlot(item.images);
+    const originalImage = await tx.menuItemImage.create({
+      data: {
+        menuItemId: item.id,
+        slot: helperSlot,
+        imageUrl: candidate.imageUrl,
+        imageStatus: "uploaded",
+        isPrimary: false,
+        originType: "menu_source_upload",
+        derivationType: "original",
+        parentImageId: null,
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    const visibleCount = item.images.filter((image) => image.slot >= 0).length;
     const createdImage = await tx.menuItemImage.create({
       data: {
         menuItemId: item.id,
         slot: nextSlot,
-        imageUrl: candidate.imageUrl,
-        imageStatus: "uploaded",
-        isPrimary: item.images.length === 0,
+        imageUrl: enhancedUpload.url,
+        imageStatus: "generated",
+        isPrimary: visibleCount === 0,
         originType: "menu_source_upload",
-        derivationType: "original",
-        parentImageId: null,
+        derivationType: "truth_preserving_edit",
+        parentImageId: originalImage.id,
       },
       select: {
         id: true,
@@ -143,7 +198,12 @@ export const menuSourceImagesRoute = new Hono<{
     try {
       const auth = c.get("auth");
       const restaurantId = c.req.param("restaurantId");
-      await assertRestaurantOwnership(restaurantId, auth.clerkId);
+      const restaurant = await assertRestaurantOwnership(restaurantId, auth.clerkId);
+      const entitlements = getRestaurantEntitlements(restaurant);
+
+      if (!entitlements.sourcePhotoReviewEnabled) {
+        throw new ApiError("Imported menu photo review is not enabled for this plan", 403);
+      }
 
       const statusParam = c.req.query("status");
       const status = statusParam
@@ -175,6 +235,11 @@ export const menuSourceImagesRoute = new Hono<{
       const auth = c.get("auth");
       const data = createCandidateSchema.parse(await c.req.json());
       const restaurant = await assertRestaurantOwnership(data.restaurantId, auth.clerkId);
+      const entitlements = getRestaurantEntitlements(restaurant);
+
+      if (!entitlements.sourcePhotoImportEnabled || !entitlements.sourcePhotoReviewEnabled) {
+        throw new ApiError("Imported menu photo review is not enabled for this plan", 403);
+      }
 
       if (data.suggestedMenuItemId) {
         const item = await prisma.menuItem.findFirst({
@@ -195,12 +260,24 @@ export const menuSourceImagesRoute = new Hono<{
         folder: `restaurants/${restaurant.id}/menu-source-candidates`,
         key: `restaurants/${restaurant.id}/menu-source-candidates/${Date.now()}-${data.filename.replace(/[^a-zA-Z0-9._-]/g, "-")}`,
       });
+      const sourcePageUpload = await uploadBuffer({
+        buffer: Buffer.from(data.sourcePageBase64, "base64"),
+        contentType: data.sourcePageContentType,
+        folder: `restaurants/${restaurant.id}/menu-source-pages`,
+        key: `restaurants/${restaurant.id}/menu-source-pages/${Date.now()}-${data.sourcePageFilename.replace(/[^a-zA-Z0-9._-]/g, "-")}`,
+      });
 
       const candidate = await prisma.menuSourceImageCandidate.create({
         data: {
           restaurantId: restaurant.id,
           imageUrl: upload.url,
+          sourcePageImageUrl: sourcePageUpload.url,
           sourcePageNumber: data.sourcePageNumber,
+          cropX: data.cropX,
+          cropY: data.cropY,
+          cropWidth: data.cropWidth,
+          cropHeight: data.cropHeight,
+          textOverlapScore: data.textOverlapScore ?? null,
           confidence: data.confidence,
           note: data.note ?? null,
           suggestedMenuItemId: data.suggestedMenuItemId ?? null,
@@ -243,7 +320,26 @@ export const menuSourceImagesRoute = new Hono<{
       const updated = await prisma.menuSourceImageCandidate.update({
         where: { id: candidate.id },
         data: {
-          assignedMenuItemId: data.assignedMenuItemId,
+          ...(data.assignedMenuItemId !== undefined
+            ? { assignedMenuItemId: data.assignedMenuItemId }
+            : {}),
+          ...(data.crop
+            ? {
+                imageUrl: (
+                  await uploadBuffer({
+                    buffer: Buffer.from(data.crop.base64, "base64"),
+                    contentType: data.crop.contentType,
+                    folder: `restaurants/${candidate.restaurantId}/menu-source-candidates`,
+                    key: `restaurants/${candidate.restaurantId}/menu-source-candidates/${Date.now()}-${data.crop.filename.replace(/[^a-zA-Z0-9._-]/g, "-")}`,
+                  })
+                ).url,
+                cropX: data.crop.cropX,
+                cropY: data.crop.cropY,
+                cropWidth: data.crop.cropWidth,
+                cropHeight: data.crop.cropHeight,
+                textOverlapScore: data.crop.textOverlapScore ?? null,
+              }
+            : {}),
         },
         include: {
           suggestedMenuItem: {

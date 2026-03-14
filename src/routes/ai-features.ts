@@ -594,4 +594,31 @@ export const aiFeaturesRoute = new Hono<{
     } catch (error) {
       return errorResponse(c, error);
     }
+  })
+  .get("/image-enhancement-usage/:restaurantId", requireAuth, async (c) => {
+    try {
+      const auth = c.get("auth");
+      const restaurantId = c.req.param("restaurantId");
+      const restaurant = await getOwnedRestaurant(restaurantId, auth.clerkId);
+      const entitlements = getRestaurantEntitlements(restaurant);
+      const usage = await getAiUsageSummary(restaurant.id, "image_enhancement");
+      const limit = entitlements.imageEnhancementLimit;
+
+      return c.json({
+        allowed: limit === null ? true : usage.used < limit,
+        usage: {
+          used: usage.used,
+          limit,
+          remaining: limit === null ? null : Math.max(limit - usage.used, 0),
+        },
+        capabilities: {
+          importOwnPhotos: entitlements.sourcePhotoImportEnabled,
+          reviewImportedPhotos: entitlements.sourcePhotoReviewEnabled,
+          batchEnhancement: entitlements.batchImageEnhancementEnabled,
+          advancedStyling: entitlements.advancedPhotoStylingEnabled,
+        },
+      });
+    } catch (error) {
+      return errorResponse(c, error);
+    }
   });

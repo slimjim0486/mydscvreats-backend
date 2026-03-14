@@ -81,6 +81,7 @@ export const aiRoute = new Hono<{
           restaurant: {
             include: {
               owner: true,
+              subscription: true,
             },
           },
         },
@@ -197,6 +198,7 @@ export const aiRoute = new Hono<{
           },
         },
         include: {
+          subscription: true,
           menuSections: {
             orderBy: { displayOrder: "asc" },
             include: {
@@ -214,6 +216,11 @@ export const aiRoute = new Hono<{
 
       if (!restaurant) {
         throw new ApiError("Restaurant not found", 404);
+      }
+
+      const entitlements = getRestaurantEntitlements(restaurant);
+      if (!entitlements.sourcePhotoImportEnabled || !entitlements.sourcePhotoReviewEnabled) {
+        throw new ApiError("Imported menu photo review is not enabled for this plan", 403);
       }
 
       const menuItems = restaurant.menuSections.flatMap((section) =>

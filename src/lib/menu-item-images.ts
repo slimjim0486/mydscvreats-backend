@@ -22,13 +22,17 @@ function sortImages<T extends { slot: number }>(images: T[]) {
   return [...images].sort((a, b) => a.slot - b.slot);
 }
 
+function getVisibleImages<T extends { slot: number }>(images: T[]) {
+  return images.filter((image) => image.slot >= 0);
+}
+
 function getPrimaryImage<T extends { isPrimary: boolean; slot: number }>(images: T[]) {
   const ordered = sortImages(images);
   return ordered.find((image) => image.isPrimary) ?? ordered[0] ?? null;
 }
 
 export function buildMenuItemImageSummary(item: MenuItemWithImages) {
-  const orderedImages = sortImages(item.images);
+  const orderedImages = sortImages(getVisibleImages(item.images));
   const primaryImage = getPrimaryImage(orderedImages);
   const hasGenerating = orderedImages.some((image) => image.imageStatus === "generating");
 
@@ -154,4 +158,16 @@ export function getNextImageSlot(images: Array<{ slot: number }>) {
   }
 
   return null;
+}
+
+export function getNextHiddenImageSlot(images: Array<{ slot: number }>) {
+  const hiddenSlots = images
+    .map((image) => image.slot)
+    .filter((slot) => slot < 0);
+
+  if (!hiddenSlots.length) {
+    return -1;
+  }
+
+  return Math.min(...hiddenSlots) - 1;
 }

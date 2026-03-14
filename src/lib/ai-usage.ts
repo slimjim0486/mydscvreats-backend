@@ -4,7 +4,8 @@ import { prisma } from "@/lib/prisma";
 export type AiFeature =
   | "description_enhance"
   | "tag_analysis"
-  | "menu_analysis";
+  | "menu_analysis"
+  | "image_enhancement";
 
 export async function checkAiLimit(
   restaurantId: string,
