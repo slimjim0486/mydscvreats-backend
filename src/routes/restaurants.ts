@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import {
   getEffectiveRestaurantBillingState,
   withRestaurantEntitlements,
@@ -14,6 +15,33 @@ import { getCurrentUser, requireAuth, resolveAuthHeader } from "@/middleware/aut
 const restaurantThemeKeys = ["saffron", "midnight", "rose", "noir", "aegean", "neon"] as const;
 const premiumThemeKeys = new Set(["noir", "aegean", "neon"]);
 
+const hhmmRegex = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+const timePeriodSchema = z.object({
+  open: z.string().regex(hhmmRegex, "Must be HH:mm 24h format"),
+  close: z.string().regex(hhmmRegex, "Must be HH:mm 24h format"),
+});
+
+const dayScheduleSchema = z.object({
+  dayOfWeek: z.number().int().min(0).max(6),
+  isClosed: z.boolean(),
+  periods: z.array(timePeriodSchema),
+}).refine(
+  (day) => day.isClosed || day.periods.length > 0,
+  { message: "Open days must have at least one time period" }
+);
+
+const operatingHoursSchema = z.object({
+  timezone: z.string().min(1),
+  schedule: z.array(dayScheduleSchema).length(7).refine(
+    (schedule) => {
+      const days = new Set(schedule.map((d) => d.dayOfWeek));
+      return days.size === 7;
+    },
+    { message: "Schedule must have exactly 7 unique days (0-6)" }
+  ),
+});
+
 const createRestaurantSchema = z.object({
   name: z.string().min(2),
   description: z.string().nullable().optional(),
@@ -25,6 +53,7 @@ const createRestaurantSchema = z.object({
   website: z.string().nullable().optional(),
   whatsappNumber: z.string().max(32).nullable().optional(),
   whatsappPrefill: z.string().max(280).nullable().optional(),
+  operatingHours: operatingHoursSchema.nullable().optional(),
   logoUrl: z.string().url().nullable().optional(),
   coverImageUrl: z.string().url().nullable().optional(),
   isPublished: z.boolean().optional(),
@@ -37,6 +66,15 @@ const updateRestaurantSchema = createRestaurantSchema.partial().extend({
 const restaurantDetailsInclude = {
   subscription: true,
   shortLink: true,
+  _count: {
+    select: {
+      menuSourceImageCandidates: {
+        where: {
+          reviewStatus: "pending" as const,
+        },
+      },
+    },
+  },
   menuSections: {
     orderBy: { displayOrder: "asc" as const },
     include: {
@@ -172,6 +210,15 @@ export const restaurantsRoute = new Hono<{
         menuItems: true,
         subscription: true,
         shortLink: true,
+        _count: {
+          select: {
+            menuSourceImageCandidates: {
+              where: {
+                reviewStatus: "pending",
+              },
+            },
+          },
+        },
       },
       orderBy: {
         updatedAt: "desc",
@@ -180,7 +227,11 @@ export const restaurantsRoute = new Hono<{
 
     return c.json(
       restaurants.map((restaurant) =>
-        withRestaurantEntitlements(applyEffectiveBillingState(restaurant))
+        withRestaurantEntitlements({
+          ...applyEffectiveBillingState(restaurant),
+          pendingMenuSourceImageReviewCount:
+            restaurant._count?.menuSourceImageCandidates ?? 0,
+        })
       )
     );
   })
@@ -194,6 +245,15 @@ export const restaurantsRoute = new Hono<{
           subscription: true,
           shortLink: true,
           gbpConnection: true,
+          _count: {
+            select: {
+              menuSourceImageCandidates: {
+                where: {
+                  reviewStatus: "pending",
+                },
+              },
+            },
+          },
           menuSections: {
             orderBy: { displayOrder: "asc" },
             include: {
@@ -218,7 +278,11 @@ export const restaurantsRoute = new Hono<{
       });
 
       const hydratedRestaurant = restaurant
-        ? withRestaurantEntitlements(applyEffectiveBillingState(restaurant))
+        ? withRestaurantEntitlements({
+            ...applyEffectiveBillingState(restaurant),
+            pendingMenuSourceImageReviewCount:
+              restaurant._count?.menuSourceImageCandidates ?? 0,
+          })
         : null;
 
       return c.json({
@@ -250,6 +314,12 @@ export const restaurantsRoute = new Hono<{
           website: data.website ?? null,
           whatsappNumber: normalizeOptionalText(data.whatsappNumber),
           whatsappPrefill: normalizeOptionalText(data.whatsappPrefill),
+          operatingHours:
+            data.operatingHours === undefined
+              ? undefined
+              : data.operatingHours === null
+                ? Prisma.DbNull
+                : data.operatingHours,
           logoUrl: data.logoUrl ?? null,
           coverImageUrl: data.coverImageUrl ?? null,
           isPublished: data.isPublished ?? false,
@@ -348,6 +418,22 @@ export const restaurantsRoute = new Hono<{
         throw new ApiError("Premium themes require a Pro plan", 403);
       }
 
+      if (data.isPublished) {
+        const pendingPhotoReviews = await prisma.menuSourceImageCandidate.count({
+          where: {
+            restaurantId: current.id,
+            reviewStatus: "pending",
+          },
+        });
+
+        if (pendingPhotoReviews > 0) {
+          throw new ApiError(
+            `Review ${pendingPhotoReviews} imported menu photo${pendingPhotoReviews === 1 ? "" : "s"} before publishing.`,
+            409
+          );
+        }
+      }
+
       const nextName = data.name?.trim() || current.name;
       const nextSlug = await generateUniqueSlug(nextName, current.id);
 
@@ -382,6 +468,12 @@ export const restaurantsRoute = new Hono<{
               data.whatsappPrefill === undefined
                 ? undefined
                 : normalizeOptionalText(data.whatsappPrefill),
+            operatingHours:
+              data.operatingHours === undefined
+                ? undefined
+                : data.operatingHours === null
+                  ? Prisma.DbNull
+                  : data.operatingHours,
             slug: nextSlug,
           },
           include: {

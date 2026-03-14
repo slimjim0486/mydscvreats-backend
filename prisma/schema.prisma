@@ -43,6 +43,25 @@ enum PromotionType {
   combo
 }
 
+enum MenuItemImageOrigin {
+  legacy_unspecified
+  mydscvr_ai
+  owner_upload
+  menu_source_upload
+}
+
+enum MenuItemImageDerivation {
+  original
+  truth_preserving_edit
+  synthetic_generation
+}
+
+enum MenuSourceImageReviewStatus {
+  pending
+  confirmed
+  dismissed
+}
+
 model User {
   id        String   @id @default(cuid())
   clerkId   String   @unique @map("clerk_id")
@@ -70,6 +89,7 @@ model Restaurant {
   website            String?
   whatsappNumber     String?            @map("whatsapp_number")
   whatsappPrefill    String?            @map("whatsapp_prefill")
+  operatingHours     Json?              @map("operating_hours")
   logoUrl            String?            @map("logo_url")
   coverImageUrl      String?            @map("cover_image_url")
   isPublished        Boolean            @default(false) @map("is_published")
@@ -90,6 +110,7 @@ model Restaurant {
   shortLinkClicks RestaurantShortLinkClick[]
   whatsappClicks WhatsAppClick[]
   menuItemLikes MenuItemLike[]
+  menuSourceImageCandidates MenuSourceImageCandidate[]
   slugAliases  RestaurantSlugAlias[]
   promotions     Promotion[]
   gbpConnection  GbpConnection?
@@ -139,6 +160,8 @@ model MenuItem {
   promotionItems PromotionItem[]
   whatsappClicks WhatsAppClick[]
   likes       MenuItemLike[]
+  suggestedMenuSourceImages MenuSourceImageCandidate[] @relation("SuggestedMenuSourceImageCandidate")
+  assignedMenuSourceImages  MenuSourceImageCandidate[] @relation("AssignedMenuSourceImageCandidate")
 
   @@index([restaurantId, displayOrder])
   @@index([sectionId, displayOrder])
@@ -146,21 +169,54 @@ model MenuItem {
 }
 
 model MenuItemImage {
-  id             String   @id @default(cuid())
-  menuItemId     String   @map("menu_item_id")
+  id             String                  @id @default(cuid())
+  menuItemId     String                  @map("menu_item_id")
   slot           Int
-  imageUrl       String?  @map("image_url")
-  imageStatus    String   @default("none") @map("image_status")
-  promptModifier String?  @map("prompt_modifier")
-  isPrimary      Boolean  @default(false) @map("is_primary")
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
+  imageUrl       String?                 @map("image_url")
+  imageStatus    String                  @default("none") @map("image_status")
+  promptModifier String?                 @map("prompt_modifier")
+  isPrimary      Boolean                 @default(false) @map("is_primary")
+  originType     MenuItemImageOrigin     @default(legacy_unspecified) @map("origin_type")
+  derivationType MenuItemImageDerivation @default(original) @map("derivation_type")
+  parentImageId  String?                 @map("parent_image_id")
+  createdAt      DateTime                @default(now()) @map("created_at")
+  updatedAt      DateTime                @updatedAt @map("updated_at")
 
-  menuItem MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  menuItem      MenuItem         @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  parentImage   MenuItemImage?   @relation("MenuItemImageDerivation", fields: [parentImageId], references: [id], onDelete: SetNull)
+  derivedImages MenuItemImage[]  @relation("MenuItemImageDerivation")
+  sourceCandidates MenuSourceImageCandidate[]
 
   @@unique([menuItemId, slot])
   @@index([menuItemId, createdAt])
+  @@index([parentImageId])
   @@map("menu_item_images")
+}
+
+model MenuSourceImageCandidate {
+  id                 String                      @id @default(cuid())
+  restaurantId       String                      @map("restaurant_id")
+  imageUrl           String                      @map("image_url")
+  sourcePageNumber   Int                         @map("source_page_number")
+  confidence         Float
+  note               String?
+  reviewStatus       MenuSourceImageReviewStatus @default(pending) @map("review_status")
+  suggestedMenuItemId String?                    @map("suggested_menu_item_id")
+  assignedMenuItemId  String?                    @map("assigned_menu_item_id")
+  linkedImageId      String?                     @map("linked_image_id")
+  createdAt          DateTime                    @default(now()) @map("created_at")
+  updatedAt          DateTime                    @updatedAt @map("updated_at")
+
+  restaurant        Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  suggestedMenuItem MenuItem?     @relation("SuggestedMenuSourceImageCandidate", fields: [suggestedMenuItemId], references: [id], onDelete: SetNull)
+  assignedMenuItem  MenuItem?     @relation("AssignedMenuSourceImageCandidate", fields: [assignedMenuItemId], references: [id], onDelete: SetNull)
+  linkedImage       MenuItemImage? @relation(fields: [linkedImageId], references: [id], onDelete: SetNull)
+
+  @@index([restaurantId, reviewStatus, createdAt])
+  @@index([suggestedMenuItemId])
+  @@index([assignedMenuItemId])
+  @@index([linkedImageId])
+  @@map("menu_source_image_candidates")
 }
 
 model Promotion {

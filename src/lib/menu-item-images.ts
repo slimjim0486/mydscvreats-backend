@@ -4,7 +4,18 @@ type MenuItemWithImages = {
   id: string;
   imageUrl: string | null;
   imageStatus: string;
-  images: Pick<MenuItemImage, "id" | "slot" | "imageUrl" | "imageStatus" | "promptModifier" | "isPrimary">[];
+  images: Pick<
+    MenuItemImage,
+    | "id"
+    | "slot"
+    | "imageUrl"
+    | "imageStatus"
+    | "promptModifier"
+    | "isPrimary"
+    | "originType"
+    | "derivationType"
+    | "parentImageId"
+  >[];
 };
 
 function sortImages<T extends { slot: number }>(images: T[]) {
@@ -45,6 +56,9 @@ export async function syncMenuItemImageSummary(
           imageStatus: true,
           promptModifier: true,
           isPrimary: true,
+          originType: true,
+          derivationType: true,
+          parentImageId: true,
         },
       },
     },
@@ -81,6 +95,9 @@ export async function ensurePrimaryImageRecord(
           imageStatus: true,
           promptModifier: true,
           isPrimary: true,
+          originType: true,
+          derivationType: true,
+          parentImageId: true,
         },
       },
     },
@@ -101,6 +118,9 @@ export async function ensurePrimaryImageRecord(
       imageUrl: item.imageUrl,
       imageStatus: item.imageStatus,
       isPrimary: true,
+      originType: "legacy_unspecified",
+      derivationType: "original",
+      parentImageId: null,
     },
   });
 
@@ -114,6 +134,9 @@ export async function ensurePrimaryImageRecord(
       imageStatus: true,
       promptModifier: true,
       isPrimary: true,
+      originType: true,
+      derivationType: true,
+      parentImageId: true,
     },
   });
 

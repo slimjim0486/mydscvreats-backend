@@ -11,11 +11,13 @@ import { errorResponse } from "@/lib/http";
 import {
   buildMenuItemImageSummary,
   ensurePrimaryImageRecord,
+  getNextImageSlot,
   syncMenuItemImageSummary,
 } from "@/lib/menu-item-images";
 import { buildPromotionInclude } from "@/lib/promotions";
 import { prisma } from "@/lib/prisma";
 import { requireAuth, resolveAuthHeader } from "@/middleware/auth";
+import { uploadBuffer } from "@/services/r2";
 
 const sectionSchema = z.object({
   restaurantId: z.string().cuid(),
@@ -73,6 +75,15 @@ const reorderSchema = z.object({
 const selectImageSchema = z.object({
   itemId: z.string().cuid(),
   imageId: z.string().cuid(),
+});
+
+const uploadImageSchema = z.object({
+  itemId: z.string().cuid(),
+  filename: z.string().min(1),
+  contentType: z.string().min(1),
+  base64: z.string().min(1),
+  makePrimary: z.boolean().optional(),
+  originType: z.enum(["owner_upload", "menu_source_upload"]).optional(),
 });
 
 const promotionTypeSchema = z.enum(["discounted_item", "deal", "combo"]);
@@ -356,6 +367,9 @@ export const menuRoute = new Hono<{
               imageStatus: true,
               promptModifier: true,
               isPrimary: true,
+              originType: true,
+              derivationType: true,
+              parentImageId: true,
             },
           },
         },
@@ -704,6 +718,95 @@ export const menuRoute = new Hono<{
       });
 
       return c.json({ ok: true, imageId: target.id });
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  })
+  .post("/items/:itemId/images/upload", requireAuth, async (c) => {
+    try {
+      const auth = c.get("auth");
+      const data = uploadImageSchema.parse({
+        itemId: c.req.param("itemId"),
+        ...(await c.req.json()),
+      });
+
+      const item = await prisma.menuItem.findUnique({
+        where: { id: data.itemId },
+        include: {
+          restaurant: {
+            include: {
+              owner: true,
+            },
+          },
+          images: {
+            orderBy: { slot: "asc" },
+          },
+        },
+      });
+
+      if (!item || item.restaurant.owner.clerkId !== auth.clerkId) {
+        throw new ApiError("Menu item not found", 404);
+      }
+
+      if (!data.contentType.startsWith("image/")) {
+        throw new ApiError("Only image uploads are supported for menu item photos", 400);
+      }
+
+      const prepared = await prisma.$transaction((tx) => ensurePrimaryImageRecord(tx, item.id));
+      const images = prepared?.images ?? item.images;
+      const nextSlot = getNextImageSlot(images);
+
+      if (nextSlot === null) {
+        throw new ApiError("You can store up to 3 images per menu item", 400);
+      }
+
+      const upload = await uploadBuffer({
+        buffer: Buffer.from(data.base64, "base64"),
+        contentType: data.contentType,
+        folder: `restaurants/${item.restaurantId}/menu-items/originals`,
+        key: `restaurants/${item.restaurantId}/menu-items/originals/${Date.now()}-${data.filename.replace(/[^a-zA-Z0-9._-]/g, "-")}`,
+      });
+
+      const makePrimary = data.makePrimary ?? images.length === 0;
+      const originType = data.originType ?? "owner_upload";
+      const createdImage = await prisma.$transaction(async (tx) => {
+        if (makePrimary) {
+          await tx.menuItemImage.updateMany({
+            where: { menuItemId: item.id },
+            data: { isPrimary: false },
+          });
+        }
+
+        const created = await tx.menuItemImage.create({
+          data: {
+            menuItemId: item.id,
+            slot: nextSlot,
+            imageUrl: upload.url,
+            imageStatus: "uploaded",
+            isPrimary: makePrimary,
+            originType,
+            derivationType: "original",
+            parentImageId: null,
+          },
+          select: {
+            id: true,
+            slot: true,
+            imageUrl: true,
+            imageStatus: true,
+            promptModifier: true,
+            isPrimary: true,
+            originType: true,
+            derivationType: true,
+            parentImageId: true,
+          },
+        });
+
+        await syncMenuItemImageSummary(tx, item.id);
+
+        return created;
+      });
+
+      return c.json({ ok: true, image: createdImage }, 201);
     } catch (error) {
       return errorResponse(c, error);
     }

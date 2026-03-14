@@ -12,6 +12,7 @@ import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/middleware/auth";
 import { enqueueMenuItemImage } from "@/queue/image-generation";
 import { extractMenuFromSource } from "@/services/claude";
+import { detectMenuSourceImages } from "@/services/menu-source-image-detector";
 
 const extractSchema = z.object({
   restaurantId: z.string().cuid(),
@@ -26,6 +27,17 @@ const imageSchema = z.object({
   promptModifier: z.string().trim().max(240).optional(),
   allowFallback: z.boolean().optional(),
   replaceImageId: z.string().cuid().optional(),
+});
+
+const detectSourceImagesSchema = z.object({
+  restaurantId: z.string().cuid(),
+  pages: z.array(
+    z.object({
+      pageNumber: z.number().int().positive(),
+      base64: z.string().min(1).max(4_000_000),
+      contentType: z.enum(["image/jpeg", "image/png", "image/webp"]),
+    })
+  ).min(1).max(8),
 });
 
 export const aiRoute = new Hono<{
@@ -110,6 +122,9 @@ export const aiRoute = new Hono<{
               promptModifier,
               imageUrl: null,
               imageStatus: "none",
+              originType: "mydscvr_ai",
+              derivationType: "synthetic_generation",
+              parentImageId: null,
             },
           });
         }
@@ -127,6 +142,9 @@ export const aiRoute = new Hono<{
             promptModifier,
             imageStatus: "none",
             isPrimary: images.length === 0,
+            originType: "mydscvr_ai",
+            derivationType: "synthetic_generation",
+            parentImageId: null,
           },
         });
       });
@@ -162,6 +180,57 @@ export const aiRoute = new Hono<{
         imageId: image.id,
         priority: entitlements.imageGenerationPriority,
       });
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  })
+  .post("/detect-source-images", requireAuth, async (c) => {
+    try {
+      const auth = c.get("auth");
+      const data = detectSourceImagesSchema.parse(await c.req.json());
+
+      const restaurant = await prisma.restaurant.findFirst({
+        where: {
+          id: data.restaurantId,
+          owner: {
+            clerkId: auth.clerkId,
+          },
+        },
+        include: {
+          menuSections: {
+            orderBy: { displayOrder: "asc" },
+            include: {
+              items: {
+                orderBy: { displayOrder: "asc" },
+                select: {
+                  id: true,
+                  name: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      if (!restaurant) {
+        throw new ApiError("Restaurant not found", 404);
+      }
+
+      const menuItems = restaurant.menuSections.flatMap((section) =>
+        section.items.map((item) => ({
+          id: item.id,
+          name: item.name,
+          sectionName: section.name,
+        }))
+      );
+
+      const detection = await detectMenuSourceImages({
+        restaurantName: restaurant.name,
+        menuItems,
+        pages: data.pages,
+      });
+
+      return c.json(detection);
     } catch (error) {
       return errorResponse(c, error);
     }
