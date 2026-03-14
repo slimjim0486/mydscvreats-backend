@@ -16,6 +16,7 @@ import { restaurantsRoute } from "@/routes/restaurants";
 import { shortLinksRoute } from "@/routes/short-links";
 import { subscriptionsRoute } from "@/routes/subscriptions";
 import { uploadRoute } from "@/routes/upload";
+import { gbpRoute } from "@/routes/gbp";
 import { whatsappRoute } from "@/routes/whatsapp";
 
 const app = new Hono();
@@ -44,6 +45,7 @@ app.route("/api/subscriptions", subscriptionsRoute);
 app.route("/api/analytics", analyticsRoute);
 app.route("/api/upload", uploadRoute);
 app.route("/api/whatsapp", whatsappRoute);
+app.route("/api/gbp", gbpRoute);
 
 serve(
   {

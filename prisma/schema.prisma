@@ -31,6 +31,12 @@ enum DomainStatus {
   failed
 }
 
+enum GbpConnectionStatus {
+  not_connected
+  self_reported
+  verified
+}
+
 enum PromotionType {
   discounted_item
   deal
@@ -85,7 +91,8 @@ model Restaurant {
   whatsappClicks WhatsAppClick[]
   menuItemLikes MenuItemLike[]
   slugAliases  RestaurantSlugAlias[]
-  promotions   Promotion[]
+  promotions     Promotion[]
+  gbpConnection  GbpConnection?
 
   @@index([ownerId])
   @@map("restaurants")
@@ -434,4 +441,20 @@ model AiUsageLog {
 
   @@index([restaurantId, feature, createdAt])
   @@map("ai_usage_logs")
+}
+
+model GbpConnection {
+  id            String              @id @default(cuid())
+  restaurantId  String              @unique @map("restaurant_id")
+  status        GbpConnectionStatus @default(not_connected)
+  gbpUrl        String?             @map("gbp_url")
+  placeId       String?             @map("place_id")
+  verifiedAt    DateTime?           @map("verified_at")
+  connectedAt   DateTime?           @map("connected_at")
+  createdAt     DateTime            @default(now()) @map("created_at")
+  updatedAt     DateTime            @updatedAt @map("updated_at")
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@map("gbp_connections")
 }

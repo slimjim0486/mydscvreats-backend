@@ -51,6 +51,7 @@ const restaurantDetailsInclude = {
 const restaurantPublicInclude = {
   subscription: true,
   shortLink: true,
+  gbpConnection: true,
   menuSections: {
     orderBy: { displayOrder: "asc" as const },
     include: {
@@ -192,6 +193,7 @@ export const restaurantsRoute = new Hono<{
         include: {
           subscription: true,
           shortLink: true,
+          gbpConnection: true,
           menuSections: {
             orderBy: { displayOrder: "asc" },
             include: {
