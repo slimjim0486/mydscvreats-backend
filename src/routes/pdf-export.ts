@@ -6,7 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/middleware/auth";
 import { generateQrDataUrl } from "@/lib/qr-code";
 
-export const pdfExportRoute = new Hono()
+export const menuPrintRoute = new Hono()
   .get("/:restaurantId", requireAuth, async (c) => {
     try {
       const auth = c.get("auth");
@@ -88,3 +88,5 @@ export const pdfExportRoute = new Hono()
       return errorResponse(c, error);
     }
   });
+
+export const pdfExportRoute = menuPrintRoute;
