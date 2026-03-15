@@ -6,11 +6,13 @@ import {
   getMenuItemLimitMessage,
   getRestaurantEntitlements,
 } from "@/lib/entitlements";
+import { checkAiLimit, getAiUsageSummary, logAiUsage } from "@/lib/ai-usage";
 import { ApiError } from "@/lib/errors";
 import { errorResponse } from "@/lib/http";
 import {
   buildMenuItemImageSummary,
   ensurePrimaryImageRecord,
+  getNextHiddenImageSlot,
   getNextImageSlot,
   syncMenuItemImageSummary,
 } from "@/lib/menu-item-images";
@@ -18,6 +20,10 @@ import { buildPromotionInclude } from "@/lib/promotions";
 import { prisma } from "@/lib/prisma";
 import { requireAuth, resolveAuthHeader } from "@/middleware/auth";
 import { uploadBuffer } from "@/services/r2";
+import {
+  createTruthPreservingEditFromUrl,
+  type TruthPreservingEditPreset,
+} from "@/services/truth-preserving-image";
 
 const sectionSchema = z.object({
   restaurantId: z.string().cuid(),
@@ -84,6 +90,14 @@ const uploadImageSchema = z.object({
   base64: z.string().min(1),
   makePrimary: z.boolean().optional(),
   originType: z.enum(["owner_upload", "menu_source_upload"]).optional(),
+});
+
+const enhanceImageSchema = z.object({
+  itemId: z.string().cuid(),
+  imageId: z.string().cuid(),
+  preset: z
+    .enum(["clean_studio", "warm_natural", "lighter_background"] satisfies [TruthPreservingEditPreset, ...TruthPreservingEditPreset[]])
+    .optional(),
 });
 
 const promotionTypeSchema = z.enum(["discounted_item", "deal", "combo"]);
@@ -819,6 +833,142 @@ export const menuRoute = new Hono<{
       });
 
       return c.json({ ok: true, image: createdImage }, 201);
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  })
+  .post("/items/:itemId/images/:imageId/enhance", requireAuth, async (c) => {
+    try {
+      const auth = c.get("auth");
+      const data = enhanceImageSchema.parse({
+        itemId: c.req.param("itemId"),
+        imageId: c.req.param("imageId"),
+        ...(await c.req.json().catch(() => ({}))),
+      });
+
+      const item = await prisma.menuItem.findUnique({
+        where: { id: data.itemId },
+        include: {
+          restaurant: {
+            include: {
+              owner: true,
+              subscription: true,
+            },
+          },
+          images: {
+            orderBy: { slot: "asc" },
+          },
+        },
+      });
+
+      if (!item || item.restaurant.owner.clerkId !== auth.clerkId) {
+        throw new ApiError("Menu item not found", 404);
+      }
+
+      const target = item.images.find((image) => image.id === data.imageId);
+      if (!target || target.slot < 0 || !target.imageUrl) {
+        throw new ApiError("Enhanceable image not found", 404);
+      }
+
+      if (target.originType !== "owner_upload" && target.originType !== "menu_source_upload") {
+        throw new ApiError("Only uploaded owner or menu images can be enhanced", 400);
+      }
+
+      const entitlements = getRestaurantEntitlements(item.restaurant);
+      const limit = await checkAiLimit(
+        item.restaurantId,
+        "image_enhancement",
+        entitlements.imageEnhancementLimit
+      );
+
+      if (!limit.allowed) {
+        throw new ApiError(
+          `Photo enhancement limit reached (${limit.used}/${entitlements.imageEnhancementLimit} this month). Upgrade for more.`,
+          403
+        );
+      }
+
+      const sourceImage =
+        target.derivationType === "truth_preserving_edit" && target.parentImageId
+          ? item.images.find((image) => image.id === target.parentImageId) ?? target
+          : target;
+
+      if (!sourceImage.imageUrl) {
+        throw new ApiError("Source image not found", 404);
+      }
+
+      const preset = data.preset ?? "clean_studio";
+      const enhanced = await createTruthPreservingEditFromUrl(sourceImage.imageUrl, preset);
+      const upload = await uploadBuffer({
+        buffer: enhanced.buffer,
+        contentType: enhanced.contentType,
+        folder: `restaurants/${item.restaurantId}/menu-items/enhanced`,
+        key: `restaurants/${item.restaurantId}/menu-items/enhanced/${Date.now()}-${target.id}.${enhanced.extension}`,
+      });
+
+      const updatedImage = await prisma.$transaction(async (tx) => {
+        let parentImageId = target.parentImageId;
+
+        if (target.derivationType !== "truth_preserving_edit") {
+          const hiddenOriginal = await tx.menuItemImage.create({
+            data: {
+              menuItemId: item.id,
+              slot: getNextHiddenImageSlot(item.images),
+              imageUrl: target.imageUrl,
+              imageStatus: target.imageStatus,
+              promptModifier: target.promptModifier,
+              isPrimary: false,
+              originType: target.originType,
+              derivationType: "original",
+              parentImageId: null,
+            },
+            select: { id: true },
+          });
+
+          parentImageId = hiddenOriginal.id;
+        }
+
+        const updated = await tx.menuItemImage.update({
+          where: { id: target.id },
+          data: {
+            imageUrl: upload.url,
+            imageStatus: "generated",
+            derivationType: "truth_preserving_edit",
+            parentImageId,
+            promptModifier: preset,
+          },
+          select: {
+            id: true,
+            slot: true,
+            imageUrl: true,
+            imageStatus: true,
+            promptModifier: true,
+            isPrimary: true,
+            originType: true,
+            derivationType: true,
+            parentImageId: true,
+          },
+        });
+
+        await syncMenuItemImageSummary(tx, item.id);
+        return updated;
+      });
+
+      await logAiUsage(item.restaurantId, "image_enhancement", 0, 0);
+      const usage = await getAiUsageSummary(item.restaurantId, "image_enhancement");
+
+      return c.json({
+        ok: true,
+        image: updatedImage,
+        usage: {
+          used: usage.used,
+          limit: entitlements.imageEnhancementLimit,
+          remaining:
+            entitlements.imageEnhancementLimit === null
+              ? null
+              : Math.max(entitlements.imageEnhancementLimit - usage.used, 0),
+        },
+      });
     } catch (error) {
       return errorResponse(c, error);
     }
