@@ -20,10 +20,8 @@ import { buildPromotionInclude } from "@/lib/promotions";
 import { prisma } from "@/lib/prisma";
 import { requireAuth, resolveAuthHeader } from "@/middleware/auth";
 import { uploadBuffer } from "@/services/r2";
-import {
-  createTruthPreservingEditFromUrl,
-  type TruthPreservingEditPreset,
-} from "@/services/truth-preserving-image";
+import { enhanceUploadedDishImage } from "@/services/google-image";
+import { type TruthPreservingEditPreset } from "@/services/truth-preserving-image";
 
 const sectionSchema = z.object({
   restaurantId: z.string().cuid(),
@@ -898,7 +896,11 @@ export const menuRoute = new Hono<{
       }
 
       const preset = data.preset ?? "clean_studio";
-      const enhanced = await createTruthPreservingEditFromUrl(sourceImage.imageUrl, preset);
+      const enhanced = await enhanceUploadedDishImage({
+        imageUrl: sourceImage.imageUrl,
+        preset,
+        allowFallback: true,
+      });
       const upload = await uploadBuffer({
         buffer: enhanced.buffer,
         contentType: enhanced.contentType,

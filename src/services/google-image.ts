@@ -19,6 +19,13 @@ interface GoogleImageResponse {
   };
 }
 
+type InlineImagePart = {
+  inlineData: {
+    mimeType: string;
+    data: string;
+  };
+};
+
 function parseRetryDelayMs(value: string) {
   const trimmed = value.trim();
 
@@ -217,7 +224,7 @@ function buildPrompt(input: {
 }
 
 function getExtensionFromMimeType(contentType: string) {
-  switch (contentType) {
+  switch (contentType.split(";")[0]?.trim()) {
     case "image/jpeg":
       return "jpg";
     case "image/webp":
@@ -227,6 +234,69 @@ function getExtensionFromMimeType(contentType: string) {
     default:
       return "png";
   }
+}
+
+function getEditModels(allowFallback?: boolean) {
+  const models = [env.GOOGLE_IMAGE_MODEL];
+  if (
+    (allowFallback ?? env.GOOGLE_IMAGE_ALLOW_FALLBACK) &&
+    env.GOOGLE_IMAGE_FALLBACK_MODEL &&
+    env.GOOGLE_IMAGE_FALLBACK_MODEL !== env.GOOGLE_IMAGE_MODEL
+  ) {
+    models.push(env.GOOGLE_IMAGE_FALLBACK_MODEL);
+  }
+
+  return models;
+}
+
+function buildEnhancementPrompt(input: {
+  preset: "clean_studio" | "warm_natural" | "lighter_background";
+}) {
+  const presetInstruction =
+    input.preset === "warm_natural"
+      ? [
+          "Use warm natural food-photography styling.",
+          "Keep a believable tabletop feel with soft warm highlights and gentle contrast.",
+        ]
+      : input.preset === "lighter_background"
+        ? [
+            "Use a brighter, lighter background treatment.",
+            "Favor a clean airy surface with soft neutral highlights and reduced clutter.",
+          ]
+        : [
+            "Use a premium clean studio food-photography treatment.",
+            "Favor a polished, editorial, menu-ready presentation with a controlled neutral background.",
+          ];
+
+  return [
+    "This is an image edit task, not a new image generation task.",
+    "Use the uploaded dish photo as the source of truth and preserve the exact dish identity.",
+    "Keep the same food, same portion, same plating, same garnish, and same overall camera perspective unless a tiny framing correction is needed.",
+    "",
+    "<required_fixes>",
+    "Remove all visible menu text, captions, labels, borders, page layout artifacts, and document background from the image.",
+    "Recenter the plated dish so it reads clearly as a hero menu image in a square frame.",
+    "Tighten composition around the food while keeping the full hero serving visible.",
+    "Repair blur, softness, compression artifacts, and noise as much as possible while keeping the result natural and photorealistic.",
+    "Correct white balance, exposure, shadows, and color so the food looks accurate and appetizing.",
+    "If needed, replace or extend the surrounding background with a clean realistic food-photo surface that does not distract from the dish.",
+    "If caption text overlaps the lower edge or side of the crop, fully remove it and reconstruct the missing non-food background naturally.",
+    "</required_fixes>",
+    "",
+    "<style>",
+    ...presetInstruction,
+    "Make the result look professionally shot, crisp, premium, and menu-ready.",
+    "Preserve believable food texture and ingredient structure.",
+    "</style>",
+    "",
+    "<hard_constraints>",
+    "Do not change the dish into a different recipe or presentation.",
+    "Do not add extra side dishes, duplicate items, props, hands, cutlery, logos, or decorative elements.",
+    "Do not invent text, watermarks, labels, or menu layout elements.",
+    "Do not dramatically change the angle or plating vessel.",
+    "Do not over-stylize, over-saturate, or make the food look synthetic or plastic.",
+    "</hard_constraints>",
+  ].join("\n");
 }
 
 function shouldTryFallbackModel(error: unknown) {
@@ -285,6 +355,67 @@ async function requestImageFromModel(model: string, prompt: string, apiKey: stri
   };
 }
 
+async function requestEditedImageFromModel(
+  model: string,
+  prompt: string,
+  sourceImage: InlineImagePart,
+  apiKey: string
+) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": apiKey,
+    },
+    body: JSON.stringify({
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { text: prompt },
+            sourceImage,
+          ],
+        },
+      ],
+      generationConfig: {
+        responseModalities: ["TEXT", "IMAGE"],
+      },
+    }),
+  });
+
+  const payload = (await response.json().catch(() => null)) as GoogleImageResponse | null;
+
+  if (!response.ok) {
+    const message =
+      payload?.error?.message ??
+      `Google image editing failed with status ${response.status}`;
+
+    throw new ApiError(message, response.status, {
+      model,
+      retryAfterMs: getRetryAfterMs(response, payload),
+      error: payload?.error ?? null,
+    });
+  }
+
+  const parts = payload?.candidates?.[0]?.content?.parts ?? [];
+  const imagePart = parts.find((p) => p.inlineData?.data);
+
+  if (!imagePart?.inlineData?.data) {
+    throw new ApiError(`Google image editing returned no image for model ${model}`, 502);
+  }
+
+  const contentType = imagePart.inlineData.mimeType ?? "image/png";
+
+  return {
+    buffer: Buffer.from(imagePart.inlineData.data, "base64"),
+    contentType,
+    extension: getExtensionFromMimeType(contentType),
+    model,
+  };
+}
+
 export async function generateDishImage(input: {
   name: string;
   description?: string | null;
@@ -299,14 +430,7 @@ export async function generateDishImage(input: {
     throw new ApiError("Google image generation is not configured", 503);
   }
 
-  const models = [env.GOOGLE_IMAGE_MODEL];
-  if (
-    (input.allowFallback ?? env.GOOGLE_IMAGE_ALLOW_FALLBACK) &&
-    env.GOOGLE_IMAGE_FALLBACK_MODEL &&
-    env.GOOGLE_IMAGE_FALLBACK_MODEL !== env.GOOGLE_IMAGE_MODEL
-  ) {
-    models.push(env.GOOGLE_IMAGE_FALLBACK_MODEL);
-  }
+  const models = getEditModels(input.allowFallback);
 
   const prompt = buildPrompt(input);
   let lastError: unknown = null;
@@ -330,4 +454,59 @@ export async function generateDishImage(input: {
   }
 
   throw new ApiError("Google image generation failed", 502);
+}
+
+export async function enhanceUploadedDishImage(input: {
+  imageUrl: string;
+  preset?: "clean_studio" | "warm_natural" | "lighter_background";
+  allowFallback?: boolean;
+}) {
+  const apiKey = getGoogleApiKey();
+  if (!apiKey) {
+    throw new ApiError("Google image generation is not configured", 503);
+  }
+
+  const response = await fetch(input.imageUrl);
+  if (!response.ok) {
+    throw new ApiError(`Failed to download source image (${response.status})`, 502);
+  }
+
+  const imageBuffer = Buffer.from(await response.arrayBuffer());
+  const contentType = response.headers.get("content-type")?.split(";")[0]?.trim() || "image/jpeg";
+  const prompt = buildEnhancementPrompt({
+    preset: input.preset ?? "clean_studio",
+  });
+
+  const models = getEditModels(input.allowFallback);
+  let lastError: unknown = null;
+
+  for (const [index, model] of models.entries()) {
+    try {
+      return await requestEditedImageFromModel(
+        model,
+        prompt,
+        {
+          inlineData: {
+            mimeType: contentType,
+            data: imageBuffer.toString("base64"),
+          },
+        },
+        apiKey
+      );
+    } catch (error) {
+      lastError = error;
+      console.warn(`Google image editing failed for model ${model}`, error);
+
+      const hasAnotherModel = index < models.length - 1;
+      if (!hasAnotherModel || !shouldTryFallbackModel(error)) {
+        break;
+      }
+    }
+  }
+
+  if (lastError instanceof ApiError) {
+    throw lastError;
+  }
+
+  throw new ApiError("Google image enhancement failed", 502);
 }
