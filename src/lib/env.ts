@@ -18,6 +18,7 @@ const envSchema = z.object({
   R2_BUCKET_NAME: z.string().default("mydscvr-eats"),
   R2_PUBLIC_URL: z.string().url().default("https://images.mydscvr.ai"),
   CLERK_SECRET_KEY: z.string().optional(),
+  CLERK_JWT_KEY: z.string().optional(),
   CLERK_JWT_ISSUER: z.string().optional(),
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),

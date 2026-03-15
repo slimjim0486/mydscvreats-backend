@@ -10,17 +10,35 @@ export interface AuthContext {
   fullName: string | null;
 }
 
+function isNetworkTimeoutError(error: unknown) {
+  const stack = error instanceof Error ? error.stack ?? error.message : String(error);
+  return stack.includes("ETIMEDOUT") || stack.includes("fetch failed");
+}
+
 export async function resolveAuthHeader(authHeader: string | undefined) {
   if (!authHeader?.startsWith("Bearer ")) {
     throw new ApiError("Missing authorization header", 401);
   }
 
   const token = authHeader.replace("Bearer ", "");
-  const payload = await verifyToken(token, {
-    secretKey: env.CLERK_SECRET_KEY,
-    jwtKey: undefined,
-    authorizedParties: [env.FRONTEND_APP_URL],
-  });
+  let payload: Awaited<ReturnType<typeof verifyToken>>;
+
+  try {
+    payload = await verifyToken(token, {
+      secretKey: env.CLERK_SECRET_KEY,
+      jwtKey: env.CLERK_JWT_KEY,
+      authorizedParties: [env.FRONTEND_APP_URL],
+    });
+  } catch (error) {
+    if (isNetworkTimeoutError(error)) {
+      throw new ApiError(
+        "Authentication verification timed out while reaching Clerk. Retry the request, or configure CLERK_JWT_KEY for networkless verification.",
+        503
+      );
+    }
+
+    throw error;
+  }
 
   const meta = payload as Record<string, unknown>;
   const email =
