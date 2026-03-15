@@ -98,6 +98,22 @@ const enhanceImageSchema = z.object({
     .optional(),
 });
 
+const batchEnhanceImagesSchema = z.object({
+  restaurantId: z.string().cuid(),
+  preset: z
+    .enum(["clean_studio", "warm_natural", "lighter_background"] satisfies [TruthPreservingEditPreset, ...TruthPreservingEditPreset[]])
+    .optional(),
+  targets: z
+    .array(
+      z.object({
+        itemId: z.string().cuid(),
+        imageId: z.string().cuid(),
+      })
+    )
+    .min(1)
+    .max(50),
+});
+
 const promotionTypeSchema = z.enum(["discounted_item", "deal", "combo"]);
 
 const promotionItemSchema = z.object({
@@ -163,6 +179,142 @@ function assertWithinMenuItemLimit(itemLimit: number | null, totalItems: number)
 function normalizeOptionalText(value: string | null | undefined) {
   const normalized = value?.trim();
   return normalized ? normalized : null;
+}
+
+async function enhanceMenuItemImageForOwner(input: {
+  clerkId: string;
+  itemId: string;
+  imageId: string;
+  preset: TruthPreservingEditPreset;
+}) {
+  const item = await prisma.menuItem.findUnique({
+    where: { id: input.itemId },
+    include: {
+      restaurant: {
+        include: {
+          owner: true,
+          subscription: true,
+        },
+      },
+      images: {
+        orderBy: { slot: "asc" },
+      },
+    },
+  });
+
+  if (!item || item.restaurant.owner.clerkId !== input.clerkId) {
+    throw new ApiError("Menu item not found", 404);
+  }
+
+  const target = item.images.find((image) => image.id === input.imageId);
+  if (!target || target.slot < 0 || !target.imageUrl) {
+    throw new ApiError("Enhanceable image not found", 404);
+  }
+
+  if (target.originType !== "owner_upload" && target.originType !== "menu_source_upload") {
+    throw new ApiError("Only uploaded owner or menu images can be enhanced", 400);
+  }
+
+  const entitlements = getRestaurantEntitlements(item.restaurant);
+  const limit = await checkAiLimit(
+    item.restaurantId,
+    "image_enhancement",
+    entitlements.imageEnhancementLimit
+  );
+
+  if (!limit.allowed) {
+    throw new ApiError(
+      `Photo enhancement limit reached (${limit.used}/${entitlements.imageEnhancementLimit} this month). Upgrade for more.`,
+      403
+    );
+  }
+
+  const sourceImage =
+    target.derivationType === "truth_preserving_edit" && target.parentImageId
+      ? item.images.find((image) => image.id === target.parentImageId) ?? target
+      : target;
+
+  if (!sourceImage.imageUrl) {
+    throw new ApiError("Source image not found", 404);
+  }
+
+  const enhanced = await enhanceUploadedDishImage({
+    imageUrl: sourceImage.imageUrl,
+    preset: input.preset,
+    allowFallback: true,
+  });
+  const upload = await uploadBuffer({
+    buffer: enhanced.buffer,
+    contentType: enhanced.contentType,
+    folder: `restaurants/${item.restaurantId}/menu-items/enhanced`,
+    key: `restaurants/${item.restaurantId}/menu-items/enhanced/${Date.now()}-${target.id}.${enhanced.extension}`,
+  });
+
+  const updatedImage = await prisma.$transaction(async (tx) => {
+    let parentImageId = target.parentImageId;
+
+    if (target.derivationType !== "truth_preserving_edit") {
+      const hiddenOriginal = await tx.menuItemImage.create({
+        data: {
+          menuItemId: item.id,
+          slot: getNextHiddenImageSlot(item.images),
+          imageUrl: target.imageUrl,
+          imageStatus: target.imageStatus,
+          promptModifier: target.promptModifier,
+          isPrimary: false,
+          originType: target.originType,
+          derivationType: "original",
+          parentImageId: null,
+        },
+        select: { id: true },
+      });
+
+      parentImageId = hiddenOriginal.id;
+    }
+
+    const updated = await tx.menuItemImage.update({
+      where: { id: target.id },
+      data: {
+        imageUrl: upload.url,
+        imageStatus: "generated",
+        derivationType: "truth_preserving_edit",
+        parentImageId,
+        promptModifier: input.preset,
+      },
+      select: {
+        id: true,
+        slot: true,
+        imageUrl: true,
+        imageStatus: true,
+        promptModifier: true,
+        isPrimary: true,
+        originType: true,
+        derivationType: true,
+        parentImageId: true,
+      },
+    });
+
+    await syncMenuItemImageSummary(tx, item.id);
+    return updated;
+  });
+
+  await logAiUsage(item.restaurantId, "image_enhancement", 0, 0);
+  const usage = await getAiUsageSummary(item.restaurantId, "image_enhancement");
+
+  return {
+    image: updatedImage,
+    itemId: item.id,
+    itemName: item.name,
+    restaurantId: item.restaurantId,
+    usage: {
+      used: usage.used,
+      limit: entitlements.imageEnhancementLimit,
+      remaining:
+        entitlements.imageEnhancementLimit === null
+          ? null
+          : Math.max(entitlements.imageEnhancementLimit - usage.used, 0),
+    },
+  };
 }
 
 function hasMeaningfulText(value: string | null | undefined) {
@@ -844,132 +996,102 @@ export const menuRoute = new Hono<{
         ...(await c.req.json().catch(() => ({}))),
       });
 
-      const item = await prisma.menuItem.findUnique({
-        where: { id: data.itemId },
-        include: {
-          restaurant: {
-            include: {
-              owner: true,
-              subscription: true,
-            },
-          },
-          images: {
-            orderBy: { slot: "asc" },
-          },
-        },
+      const result = await enhanceMenuItemImageForOwner({
+        clerkId: auth.clerkId,
+        itemId: data.itemId,
+        imageId: data.imageId,
+        preset: data.preset ?? "clean_studio",
       });
-
-      if (!item || item.restaurant.owner.clerkId !== auth.clerkId) {
-        throw new ApiError("Menu item not found", 404);
-      }
-
-      const target = item.images.find((image) => image.id === data.imageId);
-      if (!target || target.slot < 0 || !target.imageUrl) {
-        throw new ApiError("Enhanceable image not found", 404);
-      }
-
-      if (target.originType !== "owner_upload" && target.originType !== "menu_source_upload") {
-        throw new ApiError("Only uploaded owner or menu images can be enhanced", 400);
-      }
-
-      const entitlements = getRestaurantEntitlements(item.restaurant);
-      const limit = await checkAiLimit(
-        item.restaurantId,
-        "image_enhancement",
-        entitlements.imageEnhancementLimit
-      );
-
-      if (!limit.allowed) {
-        throw new ApiError(
-          `Photo enhancement limit reached (${limit.used}/${entitlements.imageEnhancementLimit} this month). Upgrade for more.`,
-          403
-        );
-      }
-
-      const sourceImage =
-        target.derivationType === "truth_preserving_edit" && target.parentImageId
-          ? item.images.find((image) => image.id === target.parentImageId) ?? target
-          : target;
-
-      if (!sourceImage.imageUrl) {
-        throw new ApiError("Source image not found", 404);
-      }
-
-      const preset = data.preset ?? "clean_studio";
-      const enhanced = await enhanceUploadedDishImage({
-        imageUrl: sourceImage.imageUrl,
-        preset,
-        allowFallback: true,
-      });
-      const upload = await uploadBuffer({
-        buffer: enhanced.buffer,
-        contentType: enhanced.contentType,
-        folder: `restaurants/${item.restaurantId}/menu-items/enhanced`,
-        key: `restaurants/${item.restaurantId}/menu-items/enhanced/${Date.now()}-${target.id}.${enhanced.extension}`,
-      });
-
-      const updatedImage = await prisma.$transaction(async (tx) => {
-        let parentImageId = target.parentImageId;
-
-        if (target.derivationType !== "truth_preserving_edit") {
-          const hiddenOriginal = await tx.menuItemImage.create({
-            data: {
-              menuItemId: item.id,
-              slot: getNextHiddenImageSlot(item.images),
-              imageUrl: target.imageUrl,
-              imageStatus: target.imageStatus,
-              promptModifier: target.promptModifier,
-              isPrimary: false,
-              originType: target.originType,
-              derivationType: "original",
-              parentImageId: null,
-            },
-            select: { id: true },
-          });
-
-          parentImageId = hiddenOriginal.id;
-        }
-
-        const updated = await tx.menuItemImage.update({
-          where: { id: target.id },
-          data: {
-            imageUrl: upload.url,
-            imageStatus: "generated",
-            derivationType: "truth_preserving_edit",
-            parentImageId,
-            promptModifier: preset,
-          },
-          select: {
-            id: true,
-            slot: true,
-            imageUrl: true,
-            imageStatus: true,
-            promptModifier: true,
-            isPrimary: true,
-            originType: true,
-            derivationType: true,
-            parentImageId: true,
-          },
-        });
-
-        await syncMenuItemImageSummary(tx, item.id);
-        return updated;
-      });
-
-      await logAiUsage(item.restaurantId, "image_enhancement", 0, 0);
-      const usage = await getAiUsageSummary(item.restaurantId, "image_enhancement");
 
       return c.json({
         ok: true,
-        image: updatedImage,
-        usage: {
-          used: usage.used,
-          limit: entitlements.imageEnhancementLimit,
-          remaining:
-            entitlements.imageEnhancementLimit === null
-              ? null
-              : Math.max(entitlements.imageEnhancementLimit - usage.used, 0),
+        image: result.image,
+        usage: result.usage,
+      });
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  })
+  .post("/images/batch-enhance", requireAuth, async (c) => {
+    try {
+      const auth = c.get("auth");
+      const data = batchEnhanceImagesSchema.parse(await c.req.json());
+      const restaurant = await getOwnedRestaurantSummary(data.restaurantId, auth.clerkId);
+      const entitlements = getRestaurantEntitlements(restaurant);
+
+      if (!entitlements.batchImageEnhancementEnabled) {
+        throw new ApiError("Batch photo enhancement is available on Pro.", 403);
+      }
+
+      const targets = data.targets.filter(
+        (target, index, list) =>
+          list.findIndex(
+            (candidate) =>
+              candidate.itemId === target.itemId && candidate.imageId === target.imageId
+          ) === index
+      );
+
+      const preset = data.preset ?? "clean_studio";
+      const successes: Array<{
+        itemId: string;
+        itemName: string;
+        image: {
+          id: string;
+          slot: number;
+          imageUrl: string | null;
+          imageStatus: string;
+          promptModifier: string | null;
+          isPrimary: boolean;
+          originType: string;
+          derivationType: string;
+          parentImageId: string | null;
+        };
+      }> = [];
+      const failures: Array<{
+        itemId: string;
+        imageId: string;
+        message: string;
+      }> = [];
+      let latestUsage = {
+        used: 0,
+        limit: entitlements.imageEnhancementLimit,
+        remaining: entitlements.imageEnhancementLimit,
+      };
+
+      for (const target of targets) {
+        try {
+          const result = await enhanceMenuItemImageForOwner({
+            clerkId: auth.clerkId,
+            itemId: target.itemId,
+            imageId: target.imageId,
+            preset,
+          });
+
+          latestUsage = result.usage;
+          successes.push({
+            itemId: result.itemId,
+            itemName: result.itemName,
+            image: result.image,
+          });
+        } catch (error) {
+          failures.push({
+            itemId: target.itemId,
+            imageId: target.imageId,
+            message: error instanceof Error ? error.message : "Failed to enhance image.",
+          });
+        }
+      }
+
+      return c.json({
+        ok: true,
+        results: {
+          requested: targets.length,
+          succeeded: successes.length,
+          failed: failures.length,
+          images: successes,
+          failures,
         },
+        usage: latestUsage,
       });
     } catch (error) {
       return errorResponse(c, error);
