@@ -30,7 +30,7 @@ app.use(
   cors({
     origin: [env.FRONTEND_APP_URL, "https://mydscvr.ai"],
     allowHeaders: ["Content-Type", "Authorization"],
-    allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   })
 );
 
