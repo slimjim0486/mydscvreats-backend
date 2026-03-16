@@ -11,6 +11,10 @@ import { cloneMenu, cloneSection } from "@/services/menu-cloner";
 import { generatePortfolioQrCode } from "@/services/qr-generator";
 import { updatePortfolioSubscriptionQuantity } from "@/services/stripe";
 
+const updatePortfolioSchema = z.object({
+  name: z.string().min(2).max(100),
+});
+
 const createBrandSchema = z.object({
   name: z.string().min(2),
   description: z.string().nullable().optional(),
@@ -159,6 +163,27 @@ export const portfolioRoute = new Hono<{
     };
   };
 }>()
+  .patch("/", requireAuth, async (c) => {
+    try {
+      const auth = c.get("auth");
+      const operator = await getOperatorAccountForClerk(auth.clerkId);
+      const data = updatePortfolioSchema.parse(await c.req.json());
+
+      const updated = await prisma.operatorAccount.update({
+        where: { id: operator.id },
+        data: { name: data.name },
+        include: {
+          brands: {
+            orderBy: [{ createdAt: "asc" }],
+          },
+        },
+      });
+
+      return c.json({ operatorAccount: withActivationState(updated) });
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  })
   .post("/brands", requireAuth, async (c) => {
     try {
       const auth = c.get("auth");

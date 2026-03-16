@@ -25,6 +25,7 @@ const portalSchema = z.object({
 
 const createPortfolioSchema = z.object({
   brandCount: z.number().int().min(3).default(3),
+  groupName: z.string().min(2).max(100).optional(),
   successUrl: z.string().url(),
   cancelUrl: z.string().url(),
   restaurantId: z.string().cuid().optional(),
@@ -226,17 +227,17 @@ export const subscriptionsRoute = new Hono<{
         throw new ApiError("Create at least one restaurant before upgrading to Portfolio.", 404);
       }
 
+      const groupName = data.groupName || "My Portfolio";
+
       const operator = await prisma.operatorAccount.upsert({
         where: { ownerId: user.id },
         update: {
-          name: legacyRestaurant.name.includes("Group")
-            ? legacyRestaurant.name
-            : `${legacyRestaurant.name} Group`,
+          name: groupName,
           brandLimit: Math.max(data.brandCount, 3),
         },
         create: {
           ownerId: user.id,
-          name: `${legacyRestaurant.name} Group`,
+          name: groupName,
           brandLimit: Math.max(data.brandCount, 3),
         },
         include: {
