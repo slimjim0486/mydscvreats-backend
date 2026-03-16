@@ -284,7 +284,7 @@ export const portfolioRoute = new Hono<{
             viewsThisWeek: 0,
             totalLikes: 0,
             totalWhatsappClicks: 0,
-            averageQualityScore: 0,
+            averageQualityScore: null,
             brandsNeedingAttention: 0,
           },
           brands: [],
@@ -383,7 +383,7 @@ export const portfolioRoute = new Hono<{
       const weeklyViewsMap = new Map(viewsThisWeekByBrand.map((entry) => [entry.restaurantId, entry._count.restaurantId]));
       const likesMap = new Map(likesByBrand.map((entry) => [entry.restaurantId, entry._count.restaurantId]));
       const whatsappMap = new Map(whatsappByBrand.map((entry) => [entry.restaurantId, entry._count.restaurantId]));
-      const latestAnalysisMap = new Map<string, number>();
+      const latestAnalysisMap = new Map<string, { score: number | null; createdAt: Date | null }>();
 
       for (const analysis of latestAnalyses) {
         if (latestAnalysisMap.has(analysis.restaurantId)) {
@@ -391,12 +391,16 @@ export const portfolioRoute = new Hono<{
         }
 
         const result = analysis.result as { overallScore?: number } | null;
-        latestAnalysisMap.set(analysis.restaurantId, result?.overallScore ?? 0);
+        latestAnalysisMap.set(analysis.restaurantId, {
+          score: result?.overallScore ?? null,
+          createdAt: analysis.createdAt,
+        });
       }
 
       const brands = operator.brands.map((brand) => {
         const totalItems = brand.menuSections.reduce((sum, section) => sum + section.items.length, 0);
-        const qualityScore = latestAnalysisMap.get(brand.id) ?? 0;
+        const latestAnalysis = latestAnalysisMap.get(brand.id);
+        const qualityScore = latestAnalysis?.score ?? null;
         const viewsThisWeek = weeklyViewsMap.get(brand.id) ?? 0;
 
         return {
@@ -413,15 +417,20 @@ export const portfolioRoute = new Hono<{
           totalLikes: likesMap.get(brand.id) ?? 0,
           whatsappClicks: whatsappMap.get(brand.id) ?? 0,
           qualityScore,
+          qualityScoreUpdatedAt: latestAnalysis?.createdAt ?? null,
           lastUpdated: brand.updatedAt,
-          needsAttention: !brand.isPublished || qualityScore < 70 || totalItems < 5,
+          needsAttention: !brand.isPublished || (qualityScore !== null && qualityScore < 70) || totalItems < 5,
         };
       }).sort((left, right) => right.viewsThisWeek - left.viewsThisWeek);
 
+      const analyzedBrands = brands.filter((brand) => brand.qualityScore !== null);
       const averageQualityScore =
-        brands.length === 0
-          ? 0
-          : Math.round(brands.reduce((sum, brand) => sum + brand.qualityScore, 0) / brands.length);
+        analyzedBrands.length === 0
+          ? null
+          : Math.round(
+              analyzedBrands.reduce((sum, brand) => sum + (brand.qualityScore ?? 0), 0) /
+                analyzedBrands.length
+            );
 
       return c.json({
         overview: {
