@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
+import { env } from "@/lib/env";
 import {
   getEffectiveRestaurantBillingState,
   getPortfolioActivationState,
@@ -13,6 +14,7 @@ import { buildLivePromotionWhere, buildPromotionInclude } from "@/lib/promotions
 import { prisma } from "@/lib/prisma";
 import { slugify } from "@/lib/slug";
 import { getCurrentUser, requireAuth, resolveAuthHeader } from "@/middleware/auth";
+import { generateSquareQrCode } from "@/services/qr-generator";
 
 const restaurantThemeKeys = ["saffron", "midnight", "rose", "noir", "aegean", "neon"] as const;
 const premiumThemeKeys = new Set(["noir", "aegean", "neon"]);
@@ -63,6 +65,11 @@ const createRestaurantSchema = z.object({
 
 const updateRestaurantSchema = createRestaurantSchema.partial().extend({
   subscriptionStatus: z.enum(["trial", "active", "paused", "cancelled"]).optional(),
+});
+const restaurantQrQuerySchema = z.object({
+  format: z.enum(["svg", "png"]).default("svg"),
+  size: z.enum(["600", "1200"]).default("600"),
+  includeShortLink: z.enum(["true", "false"]).default("true"),
 });
 
 const restaurantDetailsInclude = {
@@ -180,6 +187,24 @@ async function generateUniqueSlug(name: string, excludeRestaurantId?: string) {
     count += 1;
     slug = `${baseSlug}-${count}`;
   }
+}
+
+function buildRestaurantQrUrl(
+  restaurant: {
+    slug: string;
+    shortLink?: {
+      code: string;
+    } | null;
+  },
+  includeShortLink: boolean
+) {
+  const urlBase = env.FRONTEND_APP_URL.replace(/\/$/, "");
+
+  if (includeShortLink && restaurant.shortLink?.code) {
+    return `${urlBase}/r/${restaurant.shortLink.code}`;
+  }
+
+  return `${urlBase}/${restaurant.slug}`;
 }
 
 function applyEffectiveBillingState<T extends {
@@ -356,6 +381,29 @@ export const restaurantsRoute = new Hono<{
       });
 
       return c.json(withRestaurantEntitlements(restaurant), 201);
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  })
+  .get("/:id/qr", requireAuth, async (c) => {
+    try {
+      const auth = c.get("auth");
+      const restaurantId = c.req.param("id");
+      const query = restaurantQrQuerySchema.parse(c.req.query());
+      const restaurant = await getOwnedRestaurant(restaurantId, auth.clerkId);
+      const qr = await generateSquareQrCode({
+        url: buildRestaurantQrUrl(restaurant, query.includeShortLink === "true"),
+        label: restaurant.name,
+        format: query.format,
+        size: Number(query.size) as 600 | 1200,
+      });
+
+      return new Response(new Uint8Array(qr.buffer), {
+        headers: {
+          "Content-Type": qr.contentType,
+          "Content-Disposition": `attachment; filename="${qr.filename}"`,
+        },
+      });
     } catch (error) {
       return errorResponse(c, error);
     }
