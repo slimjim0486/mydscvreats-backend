@@ -230,7 +230,7 @@ async function seed(userId: string) {
 
   const operator = await prisma.operatorAccount.create({
     data: {
-      name: "Test Cloud Kitchen Group",
+      name: "My Portfolio",
       ownerId: userId,
       status: "trial",
       brandLimit: 10,
