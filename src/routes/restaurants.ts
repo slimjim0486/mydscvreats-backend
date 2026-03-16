@@ -5,6 +5,7 @@ import { env } from "@/lib/env";
 import {
   getEffectiveRestaurantBillingState,
   getPortfolioActivationState,
+  getRestaurantEntitlements,
   withRestaurantEntitlements,
 } from "@/lib/entitlements";
 import { ApiError } from "@/lib/errors";
@@ -483,10 +484,12 @@ export const restaurantsRoute = new Hono<{
       const restaurantId = c.req.param("id");
       const current = await getOwnedRestaurant(restaurantId, auth.clerkId);
       const data = updateRestaurantSchema.parse(await c.req.json());
-      const isPro = current.subscription?.plan === "pro" && current.subscription?.status !== "cancelled";
+      const entitlements = getRestaurantEntitlements(current);
+      const hasPremiumThemeAccess =
+        entitlements.plan === "pro" || entitlements.plan === "portfolio";
 
-      if (data.themeKey && premiumThemeKeys.has(data.themeKey) && !isPro) {
-        throw new ApiError("Premium themes require a Pro plan", 403);
+      if (data.themeKey && premiumThemeKeys.has(data.themeKey) && !hasPremiumThemeAccess) {
+        throw new ApiError("Premium themes require a Pro or Portfolio plan", 403);
       }
 
       if (data.isPublished) {
