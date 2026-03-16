@@ -40,6 +40,9 @@ const itemSchema = z.object({
   imageUrl: z.string().url().nullable().optional(),
   imageStatus: z.string().optional(),
   isAvailable: z.boolean().optional(),
+  soldOutDate: z.string().min(1).nullable().optional(),
+  specialStartsAt: z.string().datetime().nullable().optional(),
+  specialEndsAt: z.string().datetime().nullable().optional(),
   displayOrder: z.number().int().nonnegative().optional(),
 });
 
@@ -151,6 +154,7 @@ async function getOwnedRestaurantSummary(restaurantId: string, clerkId: string) 
     },
     include: {
       subscription: true,
+      operatorAccount: true,
       _count: {
         select: {
           menuItems: true,
@@ -181,6 +185,24 @@ function normalizeOptionalText(value: string | null | undefined) {
   return normalized ? normalized : null;
 }
 
+function parseOptionalDate(value: string | null | undefined) {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === null || value === "") {
+    return null;
+  }
+
+  return new Date(value);
+}
+
+function getTodayDateOnly() {
+  const today = new Date();
+  const dateOnly = today.toISOString().split("T")[0];
+  return new Date(`${dateOnly}T00:00:00.000Z`);
+}
+
 async function enhanceMenuItemImageForOwner(input: {
   clerkId: string;
   itemId: string;
@@ -194,6 +216,7 @@ async function enhanceMenuItemImageForOwner(input: {
         include: {
           owner: true,
           subscription: true,
+          operatorAccount: true,
         },
       },
       images: {
@@ -766,6 +789,9 @@ export const menuRoute = new Hono<{
           price: data.price,
           description: normalizeOptionalText(data.description),
           aiNotes: normalizeOptionalText(data.aiNotes),
+          soldOutDate: parseOptionalDate(data.soldOutDate),
+          specialStartsAt: parseOptionalDate(data.specialStartsAt),
+          specialEndsAt: parseOptionalDate(data.specialEndsAt),
           imageUrl: data.imageUrl ?? null,
           imageStatus: data.imageStatus ?? "none",
           isAvailable: data.isAvailable ?? true,
@@ -783,7 +809,7 @@ export const menuRoute = new Hono<{
       const auth = c.get("auth");
       const item = await prisma.menuItem.findUnique({
         where: { id: c.req.param("id") },
-        include: { restaurant: { include: { owner: true, subscription: true } } },
+        include: { restaurant: { include: { owner: true, subscription: true, operatorAccount: true } } },
       });
 
       if (!item || item.restaurant.owner.clerkId !== auth.clerkId) {
@@ -806,6 +832,9 @@ export const menuRoute = new Hono<{
           description:
             data.description === undefined ? undefined : normalizeOptionalText(data.description),
           aiNotes: data.aiNotes === undefined ? undefined : normalizeOptionalText(data.aiNotes),
+          soldOutDate: parseOptionalDate(data.soldOutDate),
+          specialStartsAt: parseOptionalDate(data.specialStartsAt),
+          specialEndsAt: parseOptionalDate(data.specialEndsAt),
           price: data.price,
         },
       });
@@ -832,6 +861,54 @@ export const menuRoute = new Hono<{
         await deleteEmptyPromotions(tx, item.restaurantId);
       });
       return c.body(null, 204);
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  })
+  .post("/items/:id/sold-out", requireAuth, async (c) => {
+    try {
+      const auth = c.get("auth");
+      const item = await prisma.menuItem.findUnique({
+        where: { id: c.req.param("id") },
+        include: { restaurant: { include: { owner: true } } },
+      });
+
+      if (!item || item.restaurant.owner.clerkId !== auth.clerkId) {
+        throw new ApiError("Menu item not found", 404);
+      }
+
+      const updated = await prisma.menuItem.update({
+        where: { id: item.id },
+        data: {
+          soldOutDate: getTodayDateOnly(),
+        },
+      });
+
+      return c.json(updated);
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  })
+  .delete("/items/:id/sold-out", requireAuth, async (c) => {
+    try {
+      const auth = c.get("auth");
+      const item = await prisma.menuItem.findUnique({
+        where: { id: c.req.param("id") },
+        include: { restaurant: { include: { owner: true } } },
+      });
+
+      if (!item || item.restaurant.owner.clerkId !== auth.clerkId) {
+        throw new ApiError("Menu item not found", 404);
+      }
+
+      const updated = await prisma.menuItem.update({
+        where: { id: item.id },
+        data: {
+          soldOutDate: null,
+        },
+      });
+
+      return c.json(updated);
     } catch (error) {
       return errorResponse(c, error);
     }

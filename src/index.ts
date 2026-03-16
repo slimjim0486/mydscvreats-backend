@@ -13,6 +13,7 @@ import { menuBadgesRoute } from "@/routes/menu-badges";
 import { menuRoute } from "@/routes/menu";
 import { menuSourceImagesRoute } from "@/routes/menu-source-images";
 import { previewRoute } from "@/routes/preview";
+import { portfolioRoute } from "@/routes/portfolio";
 import { restaurantsRoute } from "@/routes/restaurants";
 import { shortLinksRoute } from "@/routes/short-links";
 import { subscriptionsRoute } from "@/routes/subscriptions";
@@ -35,6 +36,7 @@ app.use(
 
 app.get("/health", (c) => c.json({ ok: true }));
 app.route("/api/restaurants", restaurantsRoute);
+app.route("/api/portfolio", portfolioRoute);
 app.route("/api/short-links", shortLinksRoute);
 app.route("/api/preview", previewRoute);
 app.route("/api/menu", menuRoute);

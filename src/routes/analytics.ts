@@ -6,6 +6,7 @@ import {
 } from "@/lib/entitlements";
 import { ApiError } from "@/lib/errors";
 import { errorResponse } from "@/lib/http";
+import { buildPublicMenuItemWhere } from "@/lib/menu-visibility";
 import { prisma } from "@/lib/prisma";
 import {
   assertAllowedPublicOrigin,
@@ -54,6 +55,7 @@ export const analyticsRoute = new Hono<{
         where: { id: data.restaurantId },
         include: {
           subscription: true,
+          operatorAccount: true,
         },
       });
 
@@ -115,7 +117,7 @@ export const analyticsRoute = new Hono<{
       const data = brandingClickSchema.parse(await c.req.json());
       const restaurant = await prisma.restaurant.findUnique({
         where: { id: data.restaurantId },
-        include: { subscription: true },
+        include: { subscription: true, operatorAccount: true },
       });
 
       if (!restaurant) {
@@ -169,6 +171,7 @@ export const analyticsRoute = new Hono<{
         where: { id: data.restaurantId },
         include: {
           subscription: true,
+          operatorAccount: true,
         },
       });
 
@@ -192,9 +195,9 @@ export const analyticsRoute = new Hono<{
 
       const menuItem = await prisma.menuItem.findFirst({
         where: {
+          ...buildPublicMenuItemWhere(),
           id: data.menuItemId,
           restaurantId: data.restaurantId,
-          isAvailable: true,
         },
         select: {
           id: true,
@@ -252,6 +255,7 @@ export const analyticsRoute = new Hono<{
         },
         include: {
           subscription: true,
+          operatorAccount: true,
         },
       });
 

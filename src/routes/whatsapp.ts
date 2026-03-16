@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getEffectiveRestaurantBillingState } from "@/lib/entitlements";
 import { ApiError } from "@/lib/errors";
 import { errorResponse } from "@/lib/http";
+import { buildPublicMenuItemWhere } from "@/lib/menu-visibility";
 import { prisma } from "@/lib/prisma";
 
 const redirectQuerySchema = z.object({
@@ -50,6 +51,7 @@ export const whatsappRoute = new Hono().get("/redirect/:restaurantId", async (c)
       where: { id: restaurantId },
       include: {
         subscription: true,
+        operatorAccount: true,
       },
     });
 
@@ -71,9 +73,9 @@ export const whatsappRoute = new Hono().get("/redirect/:restaurantId", async (c)
       query.menuItemId
         ? prisma.menuItem.findFirst({
             where: {
+              ...buildPublicMenuItemWhere(),
               id: query.menuItemId,
               restaurantId: restaurant.id,
-              isAvailable: true,
             },
             select: {
               id: true,

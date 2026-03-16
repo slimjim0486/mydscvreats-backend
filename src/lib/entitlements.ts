@@ -1,7 +1,8 @@
-export type SubscriptionPlan = "starter" | "pro";
+export type SubscriptionPlan = "starter" | "pro" | "portfolio";
 export type AnalyticsTier = "basic" | "advanced";
 export type MenuAnalysisLevel = "basic" | "full";
 export type SubscriptionStatus = "trial" | "active" | "paused" | "cancelled";
+export type PortfolioActivationState = "inactive" | "pending_setup" | "active";
 
 export interface PlanEntitlements {
   plan: SubscriptionPlan | null;
@@ -25,6 +26,12 @@ export interface PlanEntitlements {
   aiTagAnalysisLimit: number | null;
   menuAnalysisLevel: MenuAnalysisLevel;
   analysisLimit: number | null;
+  multiBrandEnable: boolean;
+  menuCloningEnabled: boolean;
+  crossBrandAnalyticsEnabled: boolean;
+  qrCodeGeneratorEnabled: boolean;
+  timeLimitedSpecialsEnabled: boolean;
+  soldOutToggleEnabled: boolean;
 }
 
 const PLAN_ENTITLEMENTS: Record<
@@ -51,6 +58,12 @@ const PLAN_ENTITLEMENTS: Record<
     aiTagAnalysisLimit: 1,
     menuAnalysisLevel: "basic",
     analysisLimit: 1,
+    multiBrandEnable: false,
+    menuCloningEnabled: false,
+    crossBrandAnalyticsEnabled: false,
+    qrCodeGeneratorEnabled: false,
+    timeLimitedSpecialsEnabled: false,
+    soldOutToggleEnabled: false,
   },
   pro: {
     menuItemLimit: null,
@@ -72,6 +85,39 @@ const PLAN_ENTITLEMENTS: Record<
     aiTagAnalysisLimit: null,
     menuAnalysisLevel: "full",
     analysisLimit: null,
+    multiBrandEnable: false,
+    menuCloningEnabled: false,
+    crossBrandAnalyticsEnabled: false,
+    qrCodeGeneratorEnabled: false,
+    timeLimitedSpecialsEnabled: false,
+    soldOutToggleEnabled: false,
+  },
+  portfolio: {
+    menuItemLimit: null,
+    sourcePhotoImportEnabled: true,
+    sourcePhotoReviewEnabled: true,
+    widgetEnabled: true,
+    menuAssistantEnabled: true,
+    customDomainEnabled: false,
+    shortLinksEnabled: true,
+    hideBranding: true,
+    analyticsTier: "advanced",
+    imageGenerationPriority: 10,
+    priorityImageGeneration: true,
+    imageEnhancementLimit: null,
+    batchImageEnhancementEnabled: true,
+    advancedPhotoStylingEnabled: true,
+    aiDescriptionLimit: null,
+    bulkDescriptionEnabled: true,
+    aiTagAnalysisLimit: null,
+    menuAnalysisLevel: "full",
+    analysisLimit: null,
+    multiBrandEnable: true,
+    menuCloningEnabled: true,
+    crossBrandAnalyticsEnabled: true,
+    qrCodeGeneratorEnabled: true,
+    timeLimitedSpecialsEnabled: true,
+    soldOutToggleEnabled: true,
   },
 };
 
@@ -97,11 +143,24 @@ const DRAFT_ENTITLEMENTS: PlanEntitlements = {
   aiTagAnalysisLimit: 1,
   menuAnalysisLevel: "basic",
   analysisLimit: 1,
+  multiBrandEnable: false,
+  menuCloningEnabled: false,
+  crossBrandAnalyticsEnabled: false,
+  qrCodeGeneratorEnabled: false,
+  timeLimitedSpecialsEnabled: false,
+  soldOutToggleEnabled: false,
 };
 
 type RestaurantPlanSource =
   | (Record<string, unknown> & {
       subscriptionStatus?: SubscriptionStatus;
+      operatorAccount?: {
+        status?: SubscriptionStatus;
+        brands?: unknown[];
+        _count?: {
+          brands?: number;
+        } | null;
+      } | null;
       subscription?: {
         plan?: SubscriptionPlan;
         status?: SubscriptionStatus;
@@ -112,7 +171,48 @@ type RestaurantPlanSource =
   | undefined;
 
 function getSubscriptionStatus(source: RestaurantPlanSource): SubscriptionStatus | null {
-  return source?.subscription?.status ?? source?.subscriptionStatus ?? null;
+  return source?.operatorAccount?.status ?? source?.subscription?.status ?? source?.subscriptionStatus ?? null;
+}
+
+function getOperatorStatus(source: RestaurantPlanSource): SubscriptionStatus | null {
+  return source?.operatorAccount?.status ?? null;
+}
+
+function getOperatorBrandCount(source: RestaurantPlanSource) {
+  if (!source?.operatorAccount) {
+    return 0;
+  }
+
+  if (Array.isArray(source.operatorAccount.brands)) {
+    return source.operatorAccount.brands.length;
+  }
+
+  return source.operatorAccount._count?.brands ?? 0;
+}
+
+export function getPortfolioActivationState(
+  source: RestaurantPlanSource
+): PortfolioActivationState {
+  const status = getOperatorStatus(source);
+
+  if (!source?.operatorAccount || (status !== "active" && status !== "trial")) {
+    return "inactive";
+  }
+
+  return getOperatorBrandCount(source) >= 3 ? "active" : "pending_setup";
+}
+
+function getPendingPortfolioEntitlements(): PlanEntitlements {
+  return {
+    ...getPlanEntitlements("pro"),
+    plan: "portfolio",
+    multiBrandEnable: false,
+    menuCloningEnabled: false,
+    crossBrandAnalyticsEnabled: false,
+    qrCodeGeneratorEnabled: false,
+    timeLimitedSpecialsEnabled: false,
+    soldOutToggleEnabled: false,
+  };
 }
 
 export function getPlanEntitlements(plan: SubscriptionPlan): PlanEntitlements {
@@ -124,10 +224,18 @@ export function getPlanEntitlements(plan: SubscriptionPlan): PlanEntitlements {
 }
 
 export function hasSelectedPlan(source: RestaurantPlanSource) {
+  if (source?.operatorAccount) {
+    return getOperatorStatus(source) !== "cancelled";
+  }
+
   return Boolean(source?.subscription?.plan && getSubscriptionStatus(source) !== "cancelled");
 }
 
 export function getRestaurantPlan(source: RestaurantPlanSource): SubscriptionPlan | null {
+  if (source?.operatorAccount && getOperatorStatus(source) !== "cancelled") {
+    return "portfolio";
+  }
+
   if (!hasSelectedPlan(source)) {
     return null;
   }
@@ -136,6 +244,16 @@ export function getRestaurantPlan(source: RestaurantPlanSource): SubscriptionPla
 }
 
 export function getRestaurantEntitlements(source: RestaurantPlanSource): PlanEntitlements {
+  const portfolioState = getPortfolioActivationState(source);
+
+  if (portfolioState === "active") {
+    return getPlanEntitlements("portfolio");
+  }
+
+  if (portfolioState === "pending_setup") {
+    return getPendingPortfolioEntitlements();
+  }
+
   const plan = getRestaurantPlan(source);
   return plan ? getPlanEntitlements(plan) : DRAFT_ENTITLEMENTS;
 }

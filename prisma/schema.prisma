@@ -22,6 +22,7 @@ enum SubscriptionStatus {
 enum SubscriptionPlan {
   starter
   pro
+  portfolio
 }
 
 enum DomainStatus {
@@ -71,7 +72,8 @@ model User {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  restaurants Restaurant[]
+  restaurants     Restaurant[]
+  operatorAccount OperatorAccount?
 
   @@map("users")
 }
@@ -96,26 +98,29 @@ model Restaurant {
   subscriptionStatus SubscriptionStatus @default(trial) @map("subscription_status")
   trialEndsAt        DateTime?          @map("trial_ends_at")
   ownerId            String             @map("owner_user_id")
+  operatorAccountId  String?            @map("operator_account_id")
   createdAt          DateTime           @default(now()) @map("created_at")
   updatedAt          DateTime           @updatedAt @map("updated_at")
 
-  owner        User          @relation(fields: [ownerId], references: [id])
-  menuSections MenuSection[]
-  menuItems    MenuItem[]
-  subscription Subscription?
-  customDomain RestaurantDomain?
-  shortLink    RestaurantShortLink?
-  pageViews    PageView[]
-  brandingClicks BrandingClick[]
-  shortLinkClicks RestaurantShortLinkClick[]
-  whatsappClicks WhatsAppClick[]
-  menuItemLikes MenuItemLike[]
+  owner                     User                      @relation(fields: [ownerId], references: [id])
+  operatorAccount           OperatorAccount?          @relation(fields: [operatorAccountId], references: [id], onDelete: SetNull)
+  menuSections              MenuSection[]
+  menuItems                 MenuItem[]
+  subscription              Subscription?
+  customDomain              RestaurantDomain?
+  shortLink                 RestaurantShortLink?
+  pageViews                 PageView[]
+  brandingClicks            BrandingClick[]
+  shortLinkClicks           RestaurantShortLinkClick[]
+  whatsappClicks            WhatsAppClick[]
+  menuItemLikes             MenuItemLike[]
   menuSourceImageCandidates MenuSourceImageCandidate[]
-  slugAliases  RestaurantSlugAlias[]
+  slugAliases               RestaurantSlugAlias[]
   promotions     Promotion[]
   gbpConnection  GbpConnection?
 
   @@index([ownerId])
+  @@index([operatorAccountId])
   @@map("restaurants")
 }
 
@@ -146,6 +151,9 @@ model MenuItem {
   imageUrl            String?  @map("image_url")
   imageStatus         String   @default("none") @map("image_status")
   isAvailable         Boolean  @default(true) @map("is_available")
+  soldOutDate         DateTime? @map("sold_out_date") @db.Date
+  specialStartsAt     DateTime? @map("special_starts_at")
+  specialEndsAt       DateTime? @map("special_ends_at")
   displayOrder        Int      @default(0) @map("display_order")
   aiDescriptionStatus String?  @map("ai_description_status")
   originalDescription String?  @map("original_description")
@@ -284,6 +292,40 @@ model Subscription {
 
   @@index([status])
   @@map("subscriptions")
+}
+
+model OperatorAccount {
+  id                   String             @id @default(cuid())
+  name                 String
+  ownerId              String             @unique @map("owner_user_id")
+  stripeCustomerId     String?            @map("stripe_customer_id")
+  stripeSubscriptionId String?            @map("stripe_subscription_id")
+  status               SubscriptionStatus @default(trial)
+  brandLimit           Int                @default(10) @map("brand_limit")
+  currentPeriodEnd     DateTime?          @map("current_period_end")
+  createdAt            DateTime           @default(now()) @map("created_at")
+  updatedAt            DateTime           @updatedAt @map("updated_at")
+
+  owner  User         @relation(fields: [ownerId], references: [id])
+  brands Restaurant[]
+
+  @@index([status])
+  @@map("operator_accounts")
+}
+
+model MenuCloneLog {
+  id                 String   @id @default(cuid())
+  sourceRestaurantId String   @map("source_restaurant_id")
+  targetRestaurantId String   @map("target_restaurant_id")
+  cloneType          String
+  sourceSectionId    String?  @map("source_section_id")
+  itemsCopied        Int      @default(0) @map("items_copied")
+  sectionsCopied     Int      @default(0) @map("sections_copied")
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  @@index([sourceRestaurantId, createdAt])
+  @@index([targetRestaurantId, createdAt])
+  @@map("menu_clone_logs")
 }
 
 model PageView {

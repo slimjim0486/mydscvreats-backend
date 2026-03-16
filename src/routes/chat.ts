@@ -9,6 +9,7 @@ import {
 import { env } from "@/lib/env";
 import { ApiError } from "@/lib/errors";
 import { errorResponse } from "@/lib/http";
+import { buildPublicMenuItemWhere } from "@/lib/menu-visibility";
 import { prisma } from "@/lib/prisma";
 import {
   assertAllowedPublicOrigin,
@@ -546,11 +547,12 @@ export const chatRoute = new Hono().post("/:restaurantId", async (c) => {
       where: { id: restaurantId },
       include: {
         subscription: true,
+        operatorAccount: true,
         menuSections: {
           orderBy: { displayOrder: "asc" },
           include: {
             items: {
-              where: { isAvailable: true },
+              where: buildPublicMenuItemWhere(),
               orderBy: { displayOrder: "asc" },
               select: {
                 name: true,

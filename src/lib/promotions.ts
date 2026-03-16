@@ -1,3 +1,5 @@
+import { buildPublicMenuItemWhere } from "@/lib/menu-visibility";
+
 export function buildPromotionInclude(options?: {
   availableOnly?: boolean;
 }) {
@@ -10,9 +12,7 @@ export function buildPromotionInclude(options?: {
           ...(options?.availableOnly
             ? {
                 where: {
-                  menuItem: {
-                    isAvailable: true,
-                  },
+                  menuItem: buildPublicMenuItemWhere(),
                 },
               }
             : {}),

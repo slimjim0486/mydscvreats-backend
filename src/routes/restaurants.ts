@@ -3,10 +3,12 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import {
   getEffectiveRestaurantBillingState,
+  getPortfolioActivationState,
   withRestaurantEntitlements,
 } from "@/lib/entitlements";
 import { ApiError } from "@/lib/errors";
 import { errorResponse } from "@/lib/http";
+import { buildPublicMenuItemWhere } from "@/lib/menu-visibility";
 import { buildLivePromotionWhere, buildPromotionInclude } from "@/lib/promotions";
 import { prisma } from "@/lib/prisma";
 import { slugify } from "@/lib/slug";
@@ -64,8 +66,10 @@ const updateRestaurantSchema = createRestaurantSchema.partial().extend({
 });
 
 const restaurantDetailsInclude = {
+  operatorAccount: true,
   subscription: true,
   shortLink: true,
+  gbpConnection: true,
   _count: {
     select: {
       menuSourceImageCandidates: {
@@ -87,6 +91,7 @@ const restaurantDetailsInclude = {
 };
 
 const restaurantPublicInclude = {
+  operatorAccount: true,
   subscription: true,
   shortLink: true,
   gbpConnection: true,
@@ -164,6 +169,9 @@ async function generateUniqueSlug(name: string, excludeRestaurantId?: string) {
 function applyEffectiveBillingState<T extends {
   isPublished: boolean;
   subscriptionStatus: "trial" | "active" | "paused" | "cancelled";
+  operatorAccount?: {
+    status: "trial" | "active" | "paused" | "cancelled";
+  } | null;
   subscription?: {
     status: "trial" | "active" | "paused" | "cancelled";
   } | null;
@@ -239,55 +247,54 @@ export const restaurantsRoute = new Hono<{
     try {
       const auth = c.get("auth");
       const user = await getCurrentUser(auth);
-      const restaurant = await prisma.restaurant.findFirst({
+      const operatorAccount = await prisma.operatorAccount.findUnique({
         where: { ownerId: user.id },
         include: {
-          subscription: true,
-          shortLink: true,
-          gbpConnection: true,
-          _count: {
-            select: {
-              menuSourceImageCandidates: {
-                where: {
-                  reviewStatus: "pending",
-                },
-              },
-            },
+          brands: {
+            orderBy: [{ createdAt: "asc" }],
+            include: restaurantDetailsInclude,
           },
-          menuSections: {
-            orderBy: { displayOrder: "asc" },
-            include: {
-              items: {
-                orderBy: { displayOrder: "asc" },
-                include: {
-                  images: {
-                    orderBy: { slot: "asc" },
-                  },
-                  dietaryTags: {
-                    include: { tag: true },
-                  },
-                  badges: {
-                    include: { badge: true },
-                  },
-                },
-              },
-            },
-          },
-          ...buildPromotionInclude(),
         },
       });
 
-      const hydratedRestaurant = restaurant
-        ? withRestaurantEntitlements({
-            ...applyEffectiveBillingState(restaurant),
-            pendingMenuSourceImageReviewCount:
-              restaurant._count?.menuSourceImageCandidates ?? 0,
-          })
-        : null;
+      const hydratedBrands = operatorAccount?.brands.map((brand) =>
+        withRestaurantEntitlements({
+          ...applyEffectiveBillingState(brand),
+          pendingMenuSourceImageReviewCount:
+            brand._count?.menuSourceImageCandidates ?? 0,
+        })
+      );
+
+      const restaurant = operatorAccount
+        ? hydratedBrands?.[0] ?? null
+        : await prisma.restaurant.findFirst({
+            where: { ownerId: user.id },
+            include: restaurantDetailsInclude,
+          }).then((ownedRestaurant) =>
+            ownedRestaurant
+              ? withRestaurantEntitlements({
+                  ...applyEffectiveBillingState(ownedRestaurant),
+                  pendingMenuSourceImageReviewCount:
+                    ownedRestaurant._count?.menuSourceImageCandidates ?? 0,
+                })
+              : null
+          );
 
       return c.json({
         user,
-        restaurant: hydratedRestaurant,
+        restaurant,
+        operatorAccount: operatorAccount
+          ? {
+              ...operatorAccount,
+              brands: hydratedBrands ?? [],
+              activationState: getPortfolioActivationState({
+                operatorAccount: {
+                  status: operatorAccount.status,
+                  brands: operatorAccount.brands,
+                },
+              }),
+            }
+          : null,
       });
     } catch (error) {
       return errorResponse(c, error);
@@ -342,7 +349,7 @@ export const restaurantsRoute = new Hono<{
       const slug = c.req.param("slug");
       const authHeader = c.req.header("authorization");
       const auth = authHeader ? await resolveAuthHeader(authHeader).catch(() => null) : null;
-      const menuItemsWhere = auth ? undefined : { isAvailable: true };
+      const menuItemsWhere = auth ? undefined : buildPublicMenuItemWhere();
       const livePromotionWhere = auth ? undefined : buildLivePromotionWhere(new Date());
 
       const restaurantInclude = {

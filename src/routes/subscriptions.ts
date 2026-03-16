@@ -3,8 +3,12 @@ import { z } from "zod";
 import { ApiError } from "@/lib/errors";
 import { errorResponse } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
-import { requireAuth } from "@/middleware/auth";
-import { createBillingPortalSession, createCheckoutSession } from "@/services/stripe";
+import { getCurrentUser, requireAuth } from "@/middleware/auth";
+import {
+  createBillingPortalSession,
+  createCheckoutSession,
+  createPortfolioCheckoutSession,
+} from "@/services/stripe";
 
 const createSchema = z.object({
   restaurantId: z.string().cuid(),
@@ -18,6 +22,18 @@ const portalSchema = z.object({
   returnUrl: z.string().url(),
 });
 
+const createPortfolioSchema = z.object({
+  brandCount: z.number().int().min(3).default(3),
+  successUrl: z.string().url(),
+  cancelUrl: z.string().url(),
+  restaurantId: z.string().cuid().optional(),
+});
+
+const portfolioPortalSchema = z.object({
+  operatorAccountId: z.string().cuid(),
+  returnUrl: z.string().url(),
+});
+
 const webhookSchema = z.object({
   type: z.enum([
     "checkout.session.completed",
@@ -28,11 +44,14 @@ const webhookSchema = z.object({
   ]),
   data: z.object({
     restaurantId: z.string().cuid().optional(),
+    operatorAccountId: z.string().cuid().optional(),
+    legacyRestaurantId: z.string().cuid().optional(),
     stripeCustomerId: z.string().optional(),
     stripeSubscriptionId: z.string().optional(),
-    plan: z.enum(["starter", "pro"]).optional(),
+    plan: z.enum(["starter", "pro", "portfolio"]).optional(),
     status: z.enum(["trial", "active", "paused", "cancelled"]).optional(),
     currentPeriodEnd: z.string().datetime().nullable().optional(),
+    quantity: z.number().int().positive().optional(),
   }),
 });
 
@@ -45,6 +64,24 @@ function getRestaurantBillingState(
     isPublished: status === "trial" || status === "active",
     trialEndsAt:
       status === "trial" && currentPeriodEnd ? new Date(currentPeriodEnd) : null,
+  };
+}
+
+function getOperatorMutation(data: z.infer<typeof webhookSchema>["data"]) {
+  return {
+    ...(data.status ? { status: data.status } : {}),
+    ...(data.stripeCustomerId !== undefined
+      ? { stripeCustomerId: data.stripeCustomerId }
+      : {}),
+    ...(data.stripeSubscriptionId !== undefined
+      ? { stripeSubscriptionId: data.stripeSubscriptionId }
+      : {}),
+    ...(data.currentPeriodEnd !== undefined
+      ? {
+          currentPeriodEnd: data.currentPeriodEnd ? new Date(data.currentPeriodEnd) : null,
+        }
+      : {}),
+    ...(data.quantity !== undefined ? { brandLimit: Math.max(data.quantity, 3) } : {}),
   };
 }
 
@@ -126,6 +163,82 @@ export const subscriptionsRoute = new Hono<{
       return errorResponse(c, error);
     }
   })
+  .post("/create-portfolio", requireAuth, async (c) => {
+    try {
+      const auth = c.get("auth");
+      const user = await getCurrentUser(auth);
+      const data = createPortfolioSchema.parse(await c.req.json());
+
+      const ownedRestaurants = await prisma.restaurant.findMany({
+        where: { ownerId: user.id },
+        include: {
+          subscription: true,
+        },
+        orderBy: { createdAt: "asc" },
+      });
+
+      const legacyRestaurant = data.restaurantId
+        ? ownedRestaurants.find((restaurant) => restaurant.id === data.restaurantId) ?? null
+        : ownedRestaurants[0] ?? null;
+
+      if (!legacyRestaurant) {
+        throw new ApiError("Create at least one restaurant before upgrading to Portfolio.", 404);
+      }
+
+      const operator = await prisma.operatorAccount.upsert({
+        where: { ownerId: user.id },
+        update: {
+          name: legacyRestaurant.name.includes("Group")
+            ? legacyRestaurant.name
+            : `${legacyRestaurant.name} Group`,
+          brandLimit: Math.max(data.brandCount, 3),
+        },
+        create: {
+          ownerId: user.id,
+          name: `${legacyRestaurant.name} Group`,
+          brandLimit: Math.max(data.brandCount, 3),
+        },
+        include: {
+          brands: true,
+        },
+      });
+
+      if (!legacyRestaurant.operatorAccountId) {
+        await prisma.restaurant.update({
+          where: { id: legacyRestaurant.id },
+          data: {
+            operatorAccountId: operator.id,
+          },
+        });
+      }
+
+      if (operator.stripeSubscriptionId && operator.status !== "cancelled") {
+        throw new ApiError(
+          "A Stripe subscription already exists for this portfolio. Use the billing portal to manage it.",
+          409
+        );
+      }
+
+      const session = await createPortfolioCheckoutSession({
+        customerEmail: user.email,
+        stripeCustomerId: operator.stripeCustomerId,
+        operatorAccountId: operator.id,
+        operatorName: operator.name,
+        brandCount: Math.max(data.brandCount, operator.brands.length || 1),
+        successUrl: data.successUrl,
+        cancelUrl: data.cancelUrl,
+        legacyRestaurantId: legacyRestaurant.id,
+      });
+
+      return c.json({
+        checkoutUrl: session.url,
+        sessionId: session.id,
+        operatorAccountId: operator.id,
+      });
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  })
   .post("/portal", requireAuth, async (c) => {
     try {
       const auth = c.get("auth");
@@ -158,6 +271,35 @@ export const subscriptionsRoute = new Hono<{
       return errorResponse(c, error);
     }
   })
+  .post("/portfolio/portal", requireAuth, async (c) => {
+    try {
+      const auth = c.get("auth");
+      const data = portfolioPortalSchema.parse(await c.req.json());
+      const operator = await prisma.operatorAccount.findFirst({
+        where: {
+          id: data.operatorAccountId,
+          owner: {
+            clerkId: auth.clerkId,
+          },
+        },
+      });
+
+      if (!operator || !operator.stripeCustomerId) {
+        throw new ApiError("Active Stripe customer not found", 404);
+      }
+
+      const session = await createBillingPortalSession({
+        stripeCustomerId: operator.stripeCustomerId,
+        returnUrl: data.returnUrl,
+      });
+
+      return c.json({
+        url: session.url,
+      });
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  })
   .post("/webhook", async (c) => {
     try {
       if (c.req.header("x-stripe-webhook-secret") !== process.env.STRIPE_WEBHOOK_SECRET) {
@@ -168,39 +310,58 @@ export const subscriptionsRoute = new Hono<{
 
       switch (payload.type) {
         case "checkout.session.completed": {
-          if (!payload.data.restaurantId || !payload.data.plan) {
+          if (!payload.data.plan) {
             throw new ApiError("Missing checkout webhook metadata", 400);
           }
 
           const status = payload.data.status ?? "trial";
-          const subscriptionMutation = getSubscriptionMutation({
-            ...payload.data,
-            status,
-          });
+          if (payload.data.operatorAccountId && payload.data.plan === "portfolio") {
+            await prisma.operatorAccount.update({
+              where: { id: payload.data.operatorAccountId },
+              data: getOperatorMutation({
+                ...payload.data,
+                status,
+              }),
+            });
 
-          await prisma.subscription.upsert({
-            where: {
-              restaurantId: payload.data.restaurantId,
-            },
-            update: subscriptionMutation,
-            create: {
-              restaurantId: payload.data.restaurantId,
-              plan: payload.data.plan,
+            await prisma.restaurant.updateMany({
+              where: {
+                operatorAccountId: payload.data.operatorAccountId,
+              },
+              data: getRestaurantBillingState(status, payload.data.currentPeriodEnd),
+            });
+          } else if (payload.data.restaurantId) {
+            const subscriptionMutation = getSubscriptionMutation({
+              ...payload.data,
               status,
-              stripeCustomerId: payload.data.stripeCustomerId,
-              stripeSubscriptionId: payload.data.stripeSubscriptionId,
-              currentPeriodEnd: payload.data.currentPeriodEnd
-                ? new Date(payload.data.currentPeriodEnd)
-                : null,
-            },
-          });
+            });
 
-          await prisma.restaurant.update({
-            where: {
-              id: payload.data.restaurantId,
-            },
-            data: getRestaurantBillingState(status, payload.data.currentPeriodEnd),
-          });
+            await prisma.subscription.upsert({
+              where: {
+                restaurantId: payload.data.restaurantId,
+              },
+              update: subscriptionMutation,
+              create: {
+                restaurantId: payload.data.restaurantId,
+                plan: payload.data.plan,
+                status,
+                stripeCustomerId: payload.data.stripeCustomerId,
+                stripeSubscriptionId: payload.data.stripeSubscriptionId,
+                currentPeriodEnd: payload.data.currentPeriodEnd
+                  ? new Date(payload.data.currentPeriodEnd)
+                  : null,
+              },
+            });
+
+            await prisma.restaurant.update({
+              where: {
+                id: payload.data.restaurantId,
+              },
+              data: getRestaurantBillingState(status, payload.data.currentPeriodEnd),
+            });
+          } else {
+            throw new ApiError("Missing webhook target", 400);
+          }
           break;
         }
         case "customer.subscription.created":
@@ -209,7 +370,22 @@ export const subscriptionsRoute = new Hono<{
             throw new ApiError("Missing subscription update payload", 400);
           }
 
-          if (payload.data.restaurantId) {
+          if (payload.data.operatorAccountId && payload.data.plan === "portfolio") {
+            await prisma.operatorAccount.update({
+              where: { id: payload.data.operatorAccountId },
+              data: getOperatorMutation(payload.data),
+            });
+
+            await prisma.restaurant.updateMany({
+              where: {
+                operatorAccountId: payload.data.operatorAccountId,
+              },
+              data: getRestaurantBillingState(
+                payload.data.status,
+                payload.data.currentPeriodEnd
+              ),
+            });
+          } else if (payload.data.restaurantId) {
             if (!payload.data.plan) {
               throw new ApiError("Missing subscription plan for restaurant sync", 400);
             }
@@ -280,11 +456,29 @@ export const subscriptionsRoute = new Hono<{
             },
           });
 
+          await prisma.operatorAccount.updateMany({
+            where: {
+              stripeSubscriptionId: payload.data.stripeSubscriptionId,
+            },
+            data: {
+              status,
+            },
+          });
+
           await prisma.restaurant.updateMany({
             where: {
-              subscription: {
-                stripeSubscriptionId: payload.data.stripeSubscriptionId,
-              },
+              OR: [
+                {
+                  subscription: {
+                    stripeSubscriptionId: payload.data.stripeSubscriptionId,
+                  },
+                },
+                {
+                  operatorAccount: {
+                    stripeSubscriptionId: payload.data.stripeSubscriptionId,
+                  },
+                },
+              ],
             },
             data: getRestaurantBillingState(status),
           });

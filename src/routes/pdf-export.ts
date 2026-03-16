@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { getRestaurantEntitlements } from "@/lib/entitlements";
 import { ApiError } from "@/lib/errors";
 import { errorResponse } from "@/lib/http";
+import { buildPublicMenuItemWhere } from "@/lib/menu-visibility";
 import { prisma } from "@/lib/prisma";
 import { requireAuth } from "@/middleware/auth";
 import { generateQrDataUrl } from "@/lib/qr-code";
@@ -16,12 +17,13 @@ export const menuPrintRoute = new Hono()
         where: { id: restaurantId },
         include: {
           owner: { select: { clerkId: true } },
+          operatorAccount: { select: { status: true } },
           subscription: { select: { plan: true, status: true } },
           menuSections: {
             orderBy: { displayOrder: "asc" },
             include: {
               items: {
-                where: { isAvailable: true },
+                where: buildPublicMenuItemWhere(),
                 orderBy: { displayOrder: "asc" },
                 include: {
                   dietaryTags: {
