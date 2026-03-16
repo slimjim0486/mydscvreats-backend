@@ -55,7 +55,15 @@ export const analyticsRoute = new Hono<{
         where: { id: data.restaurantId },
         include: {
           subscription: true,
-          operatorAccount: true,
+          operatorAccount: {
+            include: {
+              _count: {
+                select: {
+                  brands: true,
+                },
+              },
+            },
+          },
         },
       });
 
@@ -117,7 +125,18 @@ export const analyticsRoute = new Hono<{
       const data = brandingClickSchema.parse(await c.req.json());
       const restaurant = await prisma.restaurant.findUnique({
         where: { id: data.restaurantId },
-        include: { subscription: true, operatorAccount: true },
+        include: {
+          subscription: true,
+          operatorAccount: {
+            include: {
+              _count: {
+                select: {
+                  brands: true,
+                },
+              },
+            },
+          },
+        },
       });
 
       if (!restaurant) {
@@ -171,7 +190,15 @@ export const analyticsRoute = new Hono<{
         where: { id: data.restaurantId },
         include: {
           subscription: true,
-          operatorAccount: true,
+          operatorAccount: {
+            include: {
+              _count: {
+                select: {
+                  brands: true,
+                },
+              },
+            },
+          },
         },
       });
 
@@ -255,7 +282,15 @@ export const analyticsRoute = new Hono<{
         },
         include: {
           subscription: true,
-          operatorAccount: true,
+          operatorAccount: {
+            include: {
+              _count: {
+                select: {
+                  brands: true,
+                },
+              },
+            },
+          },
         },
       });
 

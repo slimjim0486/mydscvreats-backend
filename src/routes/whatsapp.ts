@@ -51,7 +51,15 @@ export const whatsappRoute = new Hono().get("/redirect/:restaurantId", async (c)
       where: { id: restaurantId },
       include: {
         subscription: true,
-        operatorAccount: true,
+        operatorAccount: {
+          include: {
+            _count: {
+              select: {
+                brands: true,
+              },
+            },
+          },
+        },
       },
     });
 

@@ -66,7 +66,15 @@ const updateRestaurantSchema = createRestaurantSchema.partial().extend({
 });
 
 const restaurantDetailsInclude = {
-  operatorAccount: true,
+  operatorAccount: {
+    include: {
+      _count: {
+        select: {
+          brands: true,
+        },
+      },
+    },
+  },
   subscription: true,
   shortLink: true,
   gbpConnection: true,
@@ -91,7 +99,15 @@ const restaurantDetailsInclude = {
 };
 
 const restaurantPublicInclude = {
-  operatorAccount: true,
+  operatorAccount: {
+    include: {
+      _count: {
+        select: {
+          brands: true,
+        },
+      },
+    },
+  },
   subscription: true,
   shortLink: true,
   gbpConnection: true,

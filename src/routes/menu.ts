@@ -154,7 +154,15 @@ async function getOwnedRestaurantSummary(restaurantId: string, clerkId: string) 
     },
     include: {
       subscription: true,
-      operatorAccount: true,
+      operatorAccount: {
+        include: {
+          _count: {
+            select: {
+              brands: true,
+            },
+          },
+        },
+      },
       _count: {
         select: {
           menuItems: true,
@@ -216,7 +224,15 @@ async function enhanceMenuItemImageForOwner(input: {
         include: {
           owner: true,
           subscription: true,
-          operatorAccount: true,
+          operatorAccount: {
+            include: {
+              _count: {
+                select: {
+                  brands: true,
+                },
+              },
+            },
+          },
         },
       },
       images: {
@@ -809,7 +825,23 @@ export const menuRoute = new Hono<{
       const auth = c.get("auth");
       const item = await prisma.menuItem.findUnique({
         where: { id: c.req.param("id") },
-        include: { restaurant: { include: { owner: true, subscription: true, operatorAccount: true } } },
+        include: {
+          restaurant: {
+            include: {
+              owner: true,
+              subscription: true,
+              operatorAccount: {
+                include: {
+                  _count: {
+                    select: {
+                      brands: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
       });
 
       if (!item || item.restaurant.owner.clerkId !== auth.clerkId) {
@@ -928,6 +960,15 @@ export const menuRoute = new Hono<{
             include: {
               owner: true,
               subscription: true,
+              operatorAccount: {
+                include: {
+                  _count: {
+                    select: {
+                      brands: true,
+                    },
+                  },
+                },
+              },
             },
           },
           images: {
@@ -979,6 +1020,15 @@ export const menuRoute = new Hono<{
           restaurant: {
             include: {
               owner: true,
+              operatorAccount: {
+                include: {
+                  _count: {
+                    select: {
+                      brands: true,
+                    },
+                  },
+                },
+              },
             },
           },
           images: {

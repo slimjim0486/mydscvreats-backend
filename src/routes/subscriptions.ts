@@ -5,6 +5,7 @@ import { errorResponse } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser, requireAuth } from "@/middleware/auth";
 import {
+  cancelStripeSubscription,
   createBillingPortalSession,
   createCheckoutSession,
   createPortfolioCheckoutSession,
@@ -103,6 +104,46 @@ function getSubscriptionMutation(
         }
       : {}),
   };
+}
+
+async function cancelLegacySubscriptionForPortfolioUpgrade(input: {
+  legacyRestaurantId?: string;
+  newPortfolioSubscriptionId?: string;
+}) {
+  if (!input.legacyRestaurantId) {
+    return;
+  }
+
+  const legacyRestaurant = await prisma.restaurant.findUnique({
+    where: { id: input.legacyRestaurantId },
+    include: {
+      subscription: true,
+    },
+  });
+
+  const legacyStripeSubscriptionId = legacyRestaurant?.subscription?.stripeSubscriptionId;
+  const legacyStatus = legacyRestaurant?.subscription?.status;
+
+  if (
+    !legacyRestaurant?.subscription ||
+    !legacyStripeSubscriptionId ||
+    !legacyStatus ||
+    legacyStatus === "cancelled" ||
+    legacyStripeSubscriptionId === input.newPortfolioSubscriptionId
+  ) {
+    return;
+  }
+
+  await cancelStripeSubscription(legacyStripeSubscriptionId);
+
+  await prisma.subscription.update({
+    where: {
+      restaurantId: legacyRestaurant.id,
+    },
+    data: {
+      status: "cancelled",
+    },
+  });
 }
 
 export const subscriptionsRoute = new Hono<{
@@ -329,6 +370,11 @@ export const subscriptionsRoute = new Hono<{
                 operatorAccountId: payload.data.operatorAccountId,
               },
               data: getRestaurantBillingState(status, payload.data.currentPeriodEnd),
+            });
+
+            await cancelLegacySubscriptionForPortfolioUpgrade({
+              legacyRestaurantId: payload.data.legacyRestaurantId,
+              newPortfolioSubscriptionId: payload.data.stripeSubscriptionId,
             });
           } else if (payload.data.restaurantId) {
             const subscriptionMutation = getSubscriptionMutation({

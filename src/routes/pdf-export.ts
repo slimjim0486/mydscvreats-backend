@@ -17,7 +17,16 @@ export const menuPrintRoute = new Hono()
         where: { id: restaurantId },
         include: {
           owner: { select: { clerkId: true } },
-          operatorAccount: { select: { status: true } },
+          operatorAccount: {
+            select: {
+              status: true,
+              _count: {
+                select: {
+                  brands: true,
+                },
+              },
+            },
+          },
           subscription: { select: { plan: true, status: true } },
           menuSections: {
             orderBy: { displayOrder: "asc" },

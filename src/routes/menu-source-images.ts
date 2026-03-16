@@ -61,6 +61,15 @@ async function assertRestaurantOwnership(restaurantId: string, clerkId: string) 
     },
     include: {
       subscription: true,
+      operatorAccount: {
+        include: {
+          _count: {
+            select: {
+              brands: true,
+            },
+          },
+        },
+      },
     },
   });
 

@@ -84,7 +84,18 @@ async function getOwnedRestaurant(restaurantId: string, clerkId: string) {
       id: restaurantId,
       owner: { clerkId },
     },
-    include: { subscription: true },
+    include: {
+      subscription: true,
+      operatorAccount: {
+        include: {
+          _count: {
+            select: {
+              brands: true,
+            },
+          },
+        },
+      },
+    },
   });
 
   if (!restaurant) {
@@ -114,7 +125,19 @@ export const aiFeaturesRoute = new Hono<{
         include: {
           section: true,
           restaurant: {
-            include: { owner: true, subscription: true },
+            include: {
+              owner: true,
+              subscription: true,
+              operatorAccount: {
+                include: {
+                  _count: {
+                    select: {
+                      brands: true,
+                    },
+                  },
+                },
+              },
+            },
           },
         },
       });

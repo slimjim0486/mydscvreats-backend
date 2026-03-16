@@ -82,6 +82,15 @@ export const aiRoute = new Hono<{
             include: {
               owner: true,
               subscription: true,
+              operatorAccount: {
+                include: {
+                  _count: {
+                    select: {
+                      brands: true,
+                    },
+                  },
+                },
+              },
             },
           },
         },
@@ -199,6 +208,15 @@ export const aiRoute = new Hono<{
         },
         include: {
           subscription: true,
+          operatorAccount: {
+            include: {
+              _count: {
+                select: {
+                  brands: true,
+                },
+              },
+            },
+          },
           menuSections: {
             orderBy: { displayOrder: "asc" },
             include: {

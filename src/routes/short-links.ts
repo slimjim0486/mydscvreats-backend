@@ -58,6 +58,15 @@ async function getOwnedRestaurant(restaurantId: string, clerkId: string) {
     },
     include: {
       subscription: true,
+      operatorAccount: {
+        include: {
+          _count: {
+            select: {
+              brands: true,
+            },
+          },
+        },
+      },
       shortLink: true,
     },
   });
@@ -86,6 +95,15 @@ export const shortLinksRoute = new Hono<{
           restaurant: {
             include: {
               subscription: true,
+              operatorAccount: {
+                include: {
+                  _count: {
+                    select: {
+                      brands: true,
+                    },
+                  },
+                },
+              },
             },
           },
         },
@@ -100,6 +118,15 @@ export const shortLinksRoute = new Hono<{
                   restaurant: {
                     include: {
                       subscription: true,
+                      operatorAccount: {
+                        include: {
+                          _count: {
+                            select: {
+                              brands: true,
+                            },
+                          },
+                        },
+                      },
                     },
                   },
                 },

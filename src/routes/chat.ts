@@ -547,7 +547,15 @@ export const chatRoute = new Hono().post("/:restaurantId", async (c) => {
       where: { id: restaurantId },
       include: {
         subscription: true,
-        operatorAccount: true,
+        operatorAccount: {
+          include: {
+            _count: {
+              select: {
+                brands: true,
+              },
+            },
+          },
+        },
         menuSections: {
           orderBy: { displayOrder: "asc" },
           include: {
