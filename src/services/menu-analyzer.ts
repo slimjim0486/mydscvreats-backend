@@ -6,7 +6,8 @@ import { prisma } from "@/lib/prisma";
 import type { MenuAnalysisLevel } from "@/lib/entitlements";
 
 let anthropic: Anthropic | null = null;
-const MENU_ANALYSIS_TIMEOUT_MS = 45_000;
+const MENU_ANALYSIS_TIMEOUT_MS = 90_000;
+const MENU_ANALYSIS_MAX_TOKENS = 12_000;
 
 function getClient(): Anthropic | null {
   if (!env.ANTHROPIC_API_KEY) return null;
@@ -122,7 +123,7 @@ export async function analyzeMenu(
   try {
     response = await client.messages.create({
       model: "claude-sonnet-4-6",
-      max_tokens: 8192,
+      max_tokens: MENU_ANALYSIS_MAX_TOKENS,
       system: `You are a Dubai restaurant menu consultant. Analyze the menu and provide actionable insights.
 
 Current date context: ${month} ${now.getFullYear()}. Consider Dubai's calendar:
