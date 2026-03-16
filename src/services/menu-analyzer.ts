@@ -1,10 +1,12 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { ApiError } from "@/lib/errors";
 import { env } from "@/lib/env";
 import { computeMenuHash } from "@/lib/ai-usage";
 import { prisma } from "@/lib/prisma";
 import type { MenuAnalysisLevel } from "@/lib/entitlements";
 
 let anthropic: Anthropic | null = null;
+const MENU_ANALYSIS_TIMEOUT_MS = 45_000;
 
 function getClient(): Anthropic | null {
   if (!env.ANTHROPIC_API_KEY) return null;
@@ -116,10 +118,12 @@ export async function analyzeMenu(
   const now = new Date();
   const month = now.toLocaleString("en-US", { month: "long" });
 
-  const response = await client.messages.create({
-    model: "claude-sonnet-4-6",
-    max_tokens: 8192,
-    system: `You are a Dubai restaurant menu consultant. Analyze the menu and provide actionable insights.
+  let response;
+  try {
+    response = await client.messages.create({
+      model: "claude-sonnet-4-6",
+      max_tokens: 8192,
+      system: `You are a Dubai restaurant menu consultant. Analyze the menu and provide actionable insights.
 
 Current date context: ${month} ${now.getFullYear()}. Consider Dubai's calendar:
 - Ramadan (varies): special iftar menus, shorter dining hours
@@ -188,7 +192,21 @@ ${menuListing}
 Analyze this menu comprehensively.`,
       },
     ],
-  });
+    }, {
+      timeout: MENU_ANALYSIS_TIMEOUT_MS,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message.toLowerCase() : "";
+
+    if (message.includes("timeout") || message.includes("timed out") || message.includes("abort")) {
+      throw new ApiError(
+        "Menu analysis is taking too long right now. Please try again in a moment.",
+        504
+      );
+    }
+
+    throw error;
+  }
 
   const text = response.content
     .filter((b) => b.type === "text")
