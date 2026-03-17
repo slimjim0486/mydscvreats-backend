@@ -5,11 +5,41 @@ import { ApiError } from "@/lib/errors";
 import { errorResponse } from "@/lib/http";
 import { buildPublicMenuItemWhere } from "@/lib/menu-visibility";
 import { prisma } from "@/lib/prisma";
+import {
+  assertAllowedPublicOrigin,
+  consumeRateLimit,
+  getClientIp,
+} from "@/lib/public-request-guards";
 
 const redirectQuerySchema = z.object({
-  source: z.enum(["floating", "contact", "menu_item", "promotion"]).default("floating"),
+  source: z
+    .enum(["floating", "contact", "menu_item", "promotion", "cart_order"])
+    .default("floating"),
   menuItemId: z.string().cuid().optional(),
   promotionId: z.string().cuid().optional(),
+  path: z.string().max(255).optional(),
+  campaign: z.string().max(120).optional(),
+});
+
+const cartRedirectSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        menuItemId: z.string().cuid(),
+        quantity: z.coerce.number().int().positive().max(20),
+        unitPrice: z.coerce.number().nonnegative(),
+      })
+    )
+    .min(1)
+    .max(25),
+  totalPrice: z.coerce.number().nonnegative(),
+  currency: z
+    .string()
+    .trim()
+    .min(3)
+    .max(3)
+    .default("AED")
+    .transform((value) => value.toUpperCase()),
   path: z.string().max(255).optional(),
   campaign: z.string().max(120).optional(),
 });
@@ -42,97 +72,350 @@ function buildWhatsappMessage(input: {
   return `${intro} and I had a question about the menu.`;
 }
 
-export const whatsappRoute = new Hono().get("/redirect/:restaurantId", async (c) => {
-  try {
-    const restaurantId = c.req.param("restaurantId");
-    const query = redirectQuerySchema.parse(c.req.query());
+function formatWhatsappMoney(amount: number, currency: string) {
+  const rounded = Math.round(amount * 100) / 100;
+  const formatted = rounded
+    .toFixed(2)
+    .replace(/\.00$/, "")
+    .replace(/(\.\d)0$/, "$1");
 
-    const restaurant = await prisma.restaurant.findUnique({
-      where: { id: restaurantId },
-      include: {
-        subscription: true,
-        operatorAccount: {
-          include: {
-            _count: {
-              select: {
-                brands: true,
+  return `${currency} ${formatted}`;
+}
+
+function normalizeCartItems(items: Array<{ menuItemId: string; quantity: number; unitPrice: number }>) {
+  const quantities = new Map<string, { menuItemId: string; quantity: number; unitPrice: number }>();
+
+  for (const item of items) {
+    const existing = quantities.get(item.menuItemId);
+    if (existing) {
+      existing.quantity += item.quantity;
+      continue;
+    }
+
+    quantities.set(item.menuItemId, { ...item });
+  }
+
+  return Array.from(quantities.values());
+}
+
+function buildCartWhatsappMessage(input: {
+  slug: string;
+  currency: string;
+  items: Array<{ name: string; quantity: number; lineTotal: number }>;
+  totalPrice: number;
+}) {
+  const itemLines = input.items.map(
+    (item) => `${item.quantity}x ${item.name} - ${formatWhatsappMoney(item.lineTotal, input.currency)}`
+  );
+
+  return [
+    `New Order from mydscvr.ai/${input.slug}`,
+    "",
+    ...itemLines,
+    "",
+    `Total: ${formatWhatsappMoney(input.totalPrice, input.currency)}`,
+    "",
+    "Name: ___",
+    "Delivery/Pickup: ___",
+    "Address: ___",
+  ].join("\n");
+}
+
+function getEffectiveMenuItemPrice(menuItem: {
+  price: { toString(): string };
+  promotionItems: Array<{
+    promotion: {
+      promoPrice: { toString(): string } | null;
+    };
+  }>;
+}) {
+  const basePrice = Number(menuItem.price.toString());
+  const promoPrice = menuItem.promotionItems[0]?.promotion.promoPrice;
+  const nextPrice = promoPrice ? Number(promoPrice.toString()) : null;
+
+  if (
+    nextPrice !== null &&
+    Number.isFinite(nextPrice) &&
+    nextPrice > 0 &&
+    nextPrice < basePrice
+  ) {
+    return nextPrice;
+  }
+
+  return basePrice;
+}
+
+export const whatsappRoute = new Hono()
+  .get("/redirect/:restaurantId", async (c) => {
+    try {
+      const restaurantId = c.req.param("restaurantId");
+      const query = redirectQuerySchema.parse(c.req.query());
+
+      const restaurant = await prisma.restaurant.findUnique({
+        where: { id: restaurantId },
+        include: {
+          subscription: true,
+          operatorAccount: {
+            include: {
+              _count: {
+                select: {
+                  brands: true,
+                },
               },
             },
           },
         },
-      },
-    });
+      });
 
-    if (!restaurant) {
-      throw new ApiError("Restaurant not found", 404);
+      if (!restaurant) {
+        throw new ApiError("Restaurant not found", 404);
+      }
+
+      const effectiveBillingState = getEffectiveRestaurantBillingState(restaurant);
+      if (!effectiveBillingState.isPublished) {
+        throw new ApiError("Restaurant not found", 404);
+      }
+
+      const whatsappNumber = normalizeWhatsappNumber(restaurant.whatsappNumber);
+      if (!whatsappNumber) {
+        throw new ApiError("WhatsApp is not configured for this restaurant", 404);
+      }
+
+      const [menuItem, promotion] = await Promise.all([
+        query.menuItemId
+          ? prisma.menuItem.findFirst({
+              where: {
+                ...buildPublicMenuItemWhere(),
+                id: query.menuItemId,
+                restaurantId: restaurant.id,
+              },
+              select: {
+                id: true,
+                name: true,
+              },
+            })
+          : Promise.resolve(null),
+        query.promotionId
+          ? prisma.promotion.findFirst({
+              where: {
+                id: query.promotionId,
+                restaurantId: restaurant.id,
+              },
+              select: {
+                id: true,
+                title: true,
+              },
+            })
+          : Promise.resolve(null),
+      ]);
+
+      const message = buildWhatsappMessage({
+        prefill: restaurant.whatsappPrefill,
+        itemName: menuItem?.name,
+        promotionTitle: promotion?.title,
+      });
+
+      try {
+        await prisma.whatsAppClick.create({
+          data: {
+            restaurantId: restaurant.id,
+            menuItemId: menuItem?.id ?? null,
+            promotionId: promotion?.id ?? null,
+            source: query.source,
+            path: query.path ?? null,
+            campaign: query.campaign ?? null,
+            referrer: c.req.header("referer") ?? c.req.header("referrer") ?? null,
+            userAgent: c.req.header("user-agent") ?? null,
+          },
+        });
+      } catch (error) {
+        console.error("Failed to record WhatsApp click", error);
+      }
+
+      const whatsappUrl = new URL(`https://wa.me/${whatsappNumber}`);
+      whatsappUrl.searchParams.set("text", message);
+
+      return c.redirect(whatsappUrl.toString(), 302);
+    } catch (error) {
+      return errorResponse(c, error);
     }
-
-    const effectiveBillingState = getEffectiveRestaurantBillingState(restaurant);
-    if (!effectiveBillingState.isPublished) {
-      throw new ApiError("Restaurant not found", 404);
-    }
-
-    const whatsappNumber = normalizeWhatsappNumber(restaurant.whatsappNumber);
-    if (!whatsappNumber) {
-      throw new ApiError("WhatsApp is not configured for this restaurant", 404);
-    }
-
-    const [menuItem, promotion] = await Promise.all([
-      query.menuItemId
-        ? prisma.menuItem.findFirst({
-            where: {
-              ...buildPublicMenuItemWhere(),
-              id: query.menuItemId,
-              restaurantId: restaurant.id,
-            },
-            select: {
-              id: true,
-              name: true,
-            },
-          })
-        : Promise.resolve(null),
-      query.promotionId
-        ? prisma.promotion.findFirst({
-            where: {
-              id: query.promotionId,
-              restaurantId: restaurant.id,
-            },
-            select: {
-              id: true,
-              title: true,
-            },
-          })
-        : Promise.resolve(null),
-    ]);
-
-    const message = buildWhatsappMessage({
-      prefill: restaurant.whatsappPrefill,
-      itemName: menuItem?.name,
-      promotionTitle: promotion?.title,
-    });
-
+  })
+  .post("/cart-redirect/:restaurantId", async (c) => {
     try {
-      await prisma.whatsAppClick.create({
-        data: {
-          restaurantId: restaurant.id,
-          menuItemId: menuItem?.id ?? null,
-          promotionId: promotion?.id ?? null,
-          source: query.source,
-          path: query.path ?? null,
-          campaign: query.campaign ?? null,
-          referrer: c.req.header("referer") ?? c.req.header("referrer") ?? null,
-          userAgent: c.req.header("user-agent") ?? null,
+      const clientIp = getClientIp(c);
+      assertAllowedPublicOrigin(c);
+
+      const globalLimit = consumeRateLimit({
+        key: `whatsapp-cart:global:${clientIp}`,
+        limit: 30,
+        windowMs: 10 * 60_000,
+      });
+      if (!globalLimit.allowed) {
+        throw new ApiError("Too many cart requests. Please try again shortly.", 429);
+      }
+
+      const restaurantId = c.req.param("restaurantId");
+      const payload = cartRedirectSchema.parse(await c.req.json());
+      const restaurant = await prisma.restaurant.findUnique({
+        where: { id: restaurantId },
+        include: {
+          subscription: true,
+          operatorAccount: {
+            include: {
+              _count: {
+                select: {
+                  brands: true,
+                },
+              },
+            },
+          },
         },
       });
+
+      if (!restaurant) {
+        throw new ApiError("Restaurant not found", 404);
+      }
+
+      const effectiveBillingState = getEffectiveRestaurantBillingState(restaurant);
+      if (!effectiveBillingState.isPublished) {
+        throw new ApiError("Restaurant not found", 404);
+      }
+
+      const whatsappNumber = normalizeWhatsappNumber(restaurant.whatsappNumber);
+      if (!whatsappNumber) {
+        throw new ApiError("WhatsApp is not configured for this restaurant", 404);
+      }
+
+      const perRestaurantLimit = consumeRateLimit({
+        key: `whatsapp-cart:${clientIp}:${restaurantId}`,
+        limit: 10,
+        windowMs: 10 * 60_000,
+      });
+      if (!perRestaurantLimit.allowed) {
+        throw new ApiError("Too many cart requests for this menu. Please try again shortly.", 429);
+      }
+
+      const allowedPaths = new Set([`/${restaurant.slug}`, `/embed/${restaurant.slug}`]);
+      if (payload.path && !allowedPaths.has(payload.path)) {
+        throw new ApiError("Invalid cart path", 400);
+      }
+
+      const normalizedItems = normalizeCartItems(payload.items);
+      const itemIds = normalizedItems.map((item) => item.menuItemId);
+      const now = new Date();
+
+      const menuItems = await prisma.menuItem.findMany({
+        where: {
+          ...buildPublicMenuItemWhere(now),
+          id: {
+            in: itemIds,
+          },
+          restaurantId: restaurant.id,
+        },
+        select: {
+          id: true,
+          name: true,
+          price: true,
+          currency: true,
+          promotionItems: {
+            where: {
+              promotion: {
+                restaurantId: restaurant.id,
+                type: "discounted_item",
+                isActive: true,
+                OR: [{ startsAt: null }, { startsAt: { lte: now } }],
+                AND: [{ OR: [{ endsAt: null }, { endsAt: { gte: now } }] }],
+              },
+            },
+            select: {
+              promotion: {
+                select: {
+                  promoPrice: true,
+                },
+              },
+            },
+            orderBy: {
+              displayOrder: "asc",
+            },
+            take: 1,
+          },
+        },
+      });
+
+      if (menuItems.length !== itemIds.length) {
+        throw new ApiError("One or more cart items are unavailable", 400);
+      }
+
+      const menuItemsById = new Map(menuItems.map((item) => [item.id, item]));
+      const currency = menuItems[0]?.currency ?? payload.currency;
+      const orderItems = normalizedItems.map((entry) => {
+        const menuItem = menuItemsById.get(entry.menuItemId);
+        if (!menuItem) {
+          throw new ApiError("One or more cart items are unavailable", 400);
+        }
+
+        const unitPrice = getEffectiveMenuItemPrice(menuItem);
+
+        return {
+          menuItemId: menuItem.id,
+          name: menuItem.name,
+          quantity: entry.quantity,
+          unitPrice,
+          lineTotal: Math.round(unitPrice * entry.quantity * 100) / 100,
+        };
+      });
+
+      const totalPrice =
+        Math.round(
+          orderItems.reduce((sum, item) => sum + item.lineTotal, 0) * 100
+        ) / 100;
+      const itemCount = orderItems.reduce((sum, item) => sum + item.quantity, 0);
+      const message = buildCartWhatsappMessage({
+        slug: restaurant.slug,
+        currency,
+        items: orderItems,
+        totalPrice,
+      });
+
+      try {
+        await prisma.$transaction(async (tx) => {
+          const click = await tx.whatsAppClick.create({
+            data: {
+              restaurantId: restaurant.id,
+              source: "cart_order",
+              path: payload.path ?? null,
+              campaign: payload.campaign ?? null,
+              referrer: c.req.header("referer") ?? c.req.header("referrer") ?? null,
+              userAgent: c.req.header("user-agent") ?? null,
+            },
+          });
+
+          await tx.whatsAppCartOrder.create({
+            data: {
+              restaurantId: restaurant.id,
+              clickId: click.id,
+              totalPrice,
+              currency,
+              itemCount,
+              items: {
+                create: orderItems.map((item) => ({
+                  menuItemId: item.menuItemId,
+                  quantity: item.quantity,
+                  unitPrice: item.unitPrice,
+                })),
+              },
+            },
+          });
+        });
+      } catch (error) {
+        console.error("Failed to record WhatsApp cart order", error);
+      }
+
+      const whatsappUrl = new URL(`https://wa.me/${whatsappNumber}`);
+      whatsappUrl.searchParams.set("text", message);
+
+      return c.json({ url: whatsappUrl.toString() }, 201);
     } catch (error) {
-      console.error("Failed to record WhatsApp click", error);
+      return errorResponse(c, error);
     }
-
-    const whatsappUrl = new URL(`https://wa.me/${whatsappNumber}`);
-    whatsappUrl.searchParams.set("text", message);
-
-    return c.redirect(whatsappUrl.toString(), 302);
-  } catch (error) {
-    return errorResponse(c, error);
-  }
-});
+  });

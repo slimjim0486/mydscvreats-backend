@@ -113,6 +113,7 @@ model Restaurant {
   brandingClicks            BrandingClick[]
   shortLinkClicks           RestaurantShortLinkClick[]
   whatsappClicks            WhatsAppClick[]
+  whatsappCartOrders        WhatsAppCartOrder[]
   menuItemLikes             MenuItemLike[]
   menuSourceImageCandidates MenuSourceImageCandidate[]
   slugAliases               RestaurantSlugAlias[]
@@ -167,6 +168,7 @@ model MenuItem {
   badges      MenuItemBadge[]
   promotionItems PromotionItem[]
   whatsappClicks WhatsAppClick[]
+  whatsappCartOrderItems WhatsAppCartOrderItem[]
   likes       MenuItemLike[]
   suggestedMenuSourceImages MenuSourceImageCandidate[] @relation("SuggestedMenuSourceImageCandidate")
   assignedMenuSourceImages  MenuSourceImageCandidate[] @relation("AssignedMenuSourceImageCandidate")
@@ -389,11 +391,45 @@ model WhatsAppClick {
   restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   menuItem   MenuItem?  @relation(fields: [menuItemId], references: [id], onDelete: SetNull)
   promotion  Promotion? @relation(fields: [promotionId], references: [id], onDelete: SetNull)
+  cartOrder  WhatsAppCartOrder?
 
   @@index([restaurantId, createdAt])
   @@index([menuItemId, createdAt])
   @@index([promotionId, createdAt])
   @@map("whatsapp_clicks")
+}
+
+model WhatsAppCartOrder {
+  id           String   @id @default(cuid())
+  restaurantId String   @map("restaurant_id")
+  clickId      String   @unique @map("click_id")
+  totalPrice   Decimal  @map("total_price") @db.Decimal(10, 2)
+  currency     String   @default("AED")
+  itemCount    Int      @map("item_count")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  restaurant Restaurant             @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  click      WhatsAppClick          @relation(fields: [clickId], references: [id], onDelete: Cascade)
+  items      WhatsAppCartOrderItem[]
+
+  @@index([restaurantId, createdAt])
+  @@map("whatsapp_cart_orders")
+}
+
+model WhatsAppCartOrderItem {
+  id         String   @id @default(cuid())
+  orderId    String   @map("order_id")
+  menuItemId String?  @map("menu_item_id")
+  quantity   Int
+  unitPrice  Decimal  @map("unit_price") @db.Decimal(10, 2)
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  order    WhatsAppCartOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  menuItem MenuItem?         @relation(fields: [menuItemId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+  @@index([menuItemId])
+  @@map("whatsapp_cart_order_items")
 }
 
 model RestaurantDomain {

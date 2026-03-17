@@ -312,6 +312,10 @@ export const analyticsRoute = new Hono<{
       const weekCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
       const emptyTopPaths: Array<{ path: string; _count: { path: number } }> = [];
       const emptyTopLikedItems: Array<{ menuItemId: string; _count: { menuItemId: number } }> = [];
+      const emptyTopOrderedItems: Array<{
+        menuItemId: string | null;
+        _sum: { quantity: number | null };
+      }> = [];
 
       const [
         totalViews,
@@ -324,6 +328,12 @@ export const analyticsRoute = new Hono<{
         whatsappTotalClicks,
         whatsappClicksToday,
         whatsappClicksThisWeek,
+        whatsappOrderClicks,
+        cartOrdersTotal,
+        cartOrdersThisWeek,
+        cartRevenueTotal,
+        cartRevenueThisWeek,
+        topOrderedItemGroups,
         menuItemLikesTotal,
         menuItemLikesToday,
         menuItemLikesThisWeek,
@@ -414,6 +424,66 @@ export const analyticsRoute = new Hono<{
             },
           },
         }),
+        prisma.whatsAppClick.count({
+          where: {
+            restaurantId,
+            source: "cart_order",
+          },
+        }),
+        prisma.whatsAppCartOrder.count({
+          where: {
+            restaurantId,
+          },
+        }),
+        prisma.whatsAppCartOrder.count({
+          where: {
+            restaurantId,
+            createdAt: {
+              gte: weekCutoff,
+            },
+          },
+        }),
+        prisma.whatsAppCartOrder.aggregate({
+          where: {
+            restaurantId,
+          },
+          _sum: {
+            totalPrice: true,
+          },
+        }),
+        prisma.whatsAppCartOrder.aggregate({
+          where: {
+            restaurantId,
+            createdAt: {
+              gte: weekCutoff,
+            },
+          },
+          _sum: {
+            totalPrice: true,
+          },
+        }),
+        prisma.whatsAppCartOrderItem
+          .groupBy({
+            by: ["menuItemId"],
+            where: {
+              menuItemId: {
+                not: null,
+              },
+              order: {
+                restaurantId,
+              },
+            },
+            _sum: {
+              quantity: true,
+            },
+            orderBy: {
+              _sum: {
+                quantity: "desc",
+              },
+            },
+            take: 5,
+          })
+          .catch(() => emptyTopOrderedItems),
         prisma.menuItemLike.count({
           where: {
             restaurantId,
@@ -488,6 +558,44 @@ export const analyticsRoute = new Hono<{
                 })
                 .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
             });
+      const topOrderedItems =
+        topOrderedItemGroups.length === 0
+          ? []
+          : await prisma.menuItem
+              .findMany({
+                where: {
+                  id: {
+                    in: topOrderedItemGroups
+                      .map((entry) => entry.menuItemId)
+                      .filter((entry): entry is string => Boolean(entry)),
+                  },
+                  restaurantId,
+                },
+                select: {
+                  id: true,
+                  name: true,
+                },
+              })
+              .then((items) => {
+                const itemsById = new Map(items.map((item) => [item.id, item]));
+
+                return topOrderedItemGroups
+                  .map((entry) => {
+                    if (!entry.menuItemId) {
+                      return null;
+                    }
+
+                    return {
+                      menuItemId: entry.menuItemId,
+                      name: itemsById.get(entry.menuItemId)?.name ?? "Deleted item",
+                      totalOrdered: entry._sum.quantity ?? 0,
+                    };
+                  })
+                  .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+              });
+      const inquiryClicks = Math.max(whatsappTotalClicks - whatsappOrderClicks, 0);
+      const estimatedRevenue = Number(cartRevenueTotal._sum.totalPrice ?? 0);
+      const estimatedRevenueThisWeek = Number(cartRevenueThisWeek._sum.totalPrice ?? 0);
 
       return c.json({
         tier: entitlements.analyticsTier,
@@ -505,6 +613,15 @@ export const analyticsRoute = new Hono<{
               totalClicks: whatsappTotalClicks,
               clicksToday: whatsappClicksToday,
               clicksThisWeek: whatsappClicksThisWeek,
+              inquiryClicks,
+              orderClicks: whatsappOrderClicks,
+              orders: {
+                total: cartOrdersTotal,
+                thisWeek: cartOrdersThisWeek,
+                estimatedRevenue,
+                estimatedRevenueThisWeek,
+                topItems: topOrderedItems,
+              },
             }
           : null,
         shortLink: activeShortLink
