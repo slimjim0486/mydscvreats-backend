@@ -254,6 +254,8 @@ export const restaurantsRoute = new Hono<{
             },
           },
         ],
+        // Exclude demo-seeded restaurants from public listings
+        owner: { clerkId: { not: { startsWith: "demo_" } } },
         ...(cuisineType ? { cuisineType } : {}),
       },
       include: {
