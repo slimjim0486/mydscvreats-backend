@@ -243,22 +243,41 @@ export const restaurantsRoute = new Hono<{
   .get("/", async (c) => {
     const cuisineType = c.req.query("cuisine");
 
+    // Curated demo restaurants allowed on the Explore page
+    const EXPLORE_SHOWCASE_SLUGS = [
+      "bamboo-basil",
+      "vicolo",
+      "zafran-house",
+      "jade-gardens",
+      "dans-home-food",
+      "levant-grill",
+      "sweet-spot-desserts",
+      "bao-bowl",
+    ];
+
     const restaurants = await prisma.restaurant.findMany({
       where: {
-        OR: [
-          { isPublished: true },
+        AND: [
           {
-            subscription: {
-              is: {
-                status: {
-                  in: ["trial", "active"],
+            OR: [
+              { isPublished: true },
+              {
+                subscription: {
+                  is: { status: { in: ["trial", "active"] } },
                 },
               },
-            },
+            ],
+          },
+          // Exclude demo-seeded restaurants unless they are in the showcase list
+          {
+            OR: [
+              { owner: { clerkId: { not: { startsWith: "demo_" } } } },
+              { slug: { in: EXPLORE_SHOWCASE_SLUGS } },
+            ],
           },
         ],
-        // Exclude demo-seeded restaurants from public listings
-        owner: { clerkId: { not: { startsWith: "demo_" } } },
+        // Only show restaurants with a cover image on explore
+        coverImageUrl: { not: null },
         ...(cuisineType ? { cuisineType } : {}),
       },
       include: {
