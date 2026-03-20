@@ -91,6 +91,9 @@ model Restaurant {
   website            String?
   whatsappNumber     String?            @map("whatsapp_number")
   whatsappPrefill    String?            @map("whatsapp_prefill")
+  deliverooUrl       String?            @map("deliveroo_url")
+  talabatUrl         String?            @map("talabat_url")
+  uberEatsUrl        String?            @map("uber_eats_url")
   operatingHours     Json?              @map("operating_hours")
   logoUrl            String?            @map("logo_url")
   coverImageUrl      String?            @map("cover_image_url")
