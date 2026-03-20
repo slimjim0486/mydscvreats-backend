@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { z } from "zod";
 import { ApiError } from "@/lib/errors";
 import { env } from "@/lib/env";
 import { computeMenuHash } from "@/lib/ai-usage";
@@ -24,6 +25,66 @@ interface RestaurantContext {
   location: string | null;
 }
 
+const menuFixSchema = z.discriminatedUnion("kind", [
+  z.object({
+    id: z.string().optional(),
+    kind: z.literal("adjust_price"),
+    menuItemId: z.string().min(1),
+    suggestedPrice: z.number().positive(),
+    reason: z.string().min(1).max(400),
+  }),
+  z.object({
+    id: z.string().optional(),
+    kind: z.literal("replace_description"),
+    menuItemId: z.string().min(1),
+    suggestedDescription: z.string().min(1).max(400),
+    reason: z.string().min(1).max(400),
+  }),
+  z.object({
+    id: z.string().optional(),
+    kind: z.literal("add_menu_item"),
+    targetSectionName: z.string().min(1).max(120),
+    suggestedName: z.string().min(1).max(120),
+    suggestedDescription: z.string().min(1).max(400),
+    suggestedPrice: z.number().positive(),
+    reason: z.string().min(1).max(400),
+  }),
+  z.object({
+    id: z.string().optional(),
+    kind: z.literal("normalize_name"),
+    menuItemId: z.string().min(1),
+    suggestedName: z.string().min(1).max(120),
+    reason: z.string().min(1).max(400),
+  }),
+]);
+
+const analysisItemSchema = z.object({
+  id: z.string().optional(),
+  type: z.enum(["warning", "suggestion", "positive"]),
+  message: z.string().min(1).max(500),
+  menuItemId: z.string().optional(),
+  menuItemName: z.string().optional(),
+  fix: menuFixSchema.nullish(),
+});
+
+const categoryAnalysisSchema = z.object({
+  score: z.number().min(0).max(100),
+  title: z.string().min(1).max(120),
+  summary: z.string().min(1).max(500),
+  items: z.array(analysisItemSchema).max(5),
+});
+
+const menuAnalysisSchema = z.object({
+  overallScore: z.number().min(0).max(100),
+  categories: z.object({
+    pricing: categoryAnalysisSchema,
+    descriptions: categoryAnalysisSchema,
+    structure: categoryAnalysisSchema,
+    gaps: categoryAnalysisSchema,
+    seasonal: categoryAnalysisSchema,
+  }),
+});
+
 export interface MenuAnalysisResult {
   overallScore: number;
   categories: {
@@ -43,10 +104,49 @@ export interface CategoryAnalysis {
 }
 
 export interface AnalysisItem {
+  id: string;
   type: "warning" | "suggestion" | "positive";
   message: string;
   menuItemId?: string;
   menuItemName?: string;
+  fix?: MenuAnalysisFix | null;
+}
+
+export type MenuAnalysisFix =
+  | AdjustPriceFix
+  | ReplaceDescriptionFix
+  | AddMenuItemFix
+  | NormalizeNameFix;
+
+export interface BaseMenuAnalysisFix {
+  id: string;
+  reason: string;
+}
+
+export interface AdjustPriceFix extends BaseMenuAnalysisFix {
+  kind: "adjust_price";
+  menuItemId: string;
+  suggestedPrice: number;
+}
+
+export interface ReplaceDescriptionFix extends BaseMenuAnalysisFix {
+  kind: "replace_description";
+  menuItemId: string;
+  suggestedDescription: string;
+}
+
+export interface AddMenuItemFix extends BaseMenuAnalysisFix {
+  kind: "add_menu_item";
+  targetSectionName: string;
+  suggestedName: string;
+  suggestedDescription: string;
+  suggestedPrice: number;
+}
+
+export interface NormalizeNameFix extends BaseMenuAnalysisFix {
+  kind: "normalize_name";
+  menuItemId: string;
+  suggestedName: string;
 }
 
 export async function analyzeMenu(
@@ -74,7 +174,7 @@ export async function analyzeMenu(
   });
 
   if (cached) {
-    const fullResult = cached.result as unknown as MenuAnalysisResult;
+    const fullResult = normalizeMenuAnalysisResult(cached.result);
     if (level === "basic") {
       return {
         result: trimToBasic(fullResult),
@@ -140,7 +240,17 @@ Return ONLY valid JSON in this exact format:
       "score": 80,
       "title": "Pricing Health",
       "summary": "Brief summary",
-      "items": [{ "type": "warning|suggestion|positive", "message": "Detail", "menuItemId": "optional", "menuItemName": "optional" }]
+      "items": [{
+        "type": "warning|suggestion|positive",
+        "message": "Detail",
+        "menuItemId": "optional",
+        "menuItemName": "optional",
+        "fix": {
+          "kind": "adjust_price|replace_description|add_menu_item|normalize_name",
+          "reason": "Why this fix helps",
+          "...typeSpecificFields": "see below"
+        }
+      }]
     },
     "descriptions": {
       "score": 60,
@@ -177,7 +287,16 @@ Analysis criteria:
 - Seasonal: current month opportunities for Dubai market
 - Overall score: weighted average (0-100)
 - Keep items arrays concise (max 5 items per category)
-- Include menuItemId and menuItemName when referencing specific items`,
+- Include menuItemId and menuItemName when referencing specific items
+- Add a "fix" object for actionable warning/suggestion items when possible. Set "fix" to null for positive items or when no safe fix is available
+- Fix shapes:
+  - Pricing outlier -> { "kind": "adjust_price", "menuItemId": "...", "suggestedPrice": 42, "reason": "..." }
+  - Weak/missing description -> { "kind": "replace_description", "menuItemId": "...", "suggestedDescription": "...", "reason": "..." }
+  - Missing staple dish -> { "kind": "add_menu_item", "targetSectionName": "Mains", "suggestedName": "...", "suggestedDescription": "...", "suggestedPrice": 38, "reason": "..." }
+  - Inconsistent naming -> { "kind": "normalize_name", "menuItemId": "...", "suggestedName": "...", "reason": "..." }
+- Keep description fixes under 180 characters
+- Use rounded AED prices when suggesting prices
+- Never invent menuItemId values. Only use IDs present in the menu listing`,
     messages: [
       {
         role: "user",
@@ -219,7 +338,7 @@ Analyze this menu comprehensively.`,
     .replace(/```$/, "")
     .trim();
 
-  const result = JSON.parse(text) as MenuAnalysisResult;
+  const result = normalizeMenuAnalysisResult(JSON.parse(text));
 
   // Store in cache
   await prisma.menuAnalysis.create({
@@ -276,4 +395,53 @@ function trimToBasic(result: MenuAnalysisResult): MenuAnalysisResult {
       },
     },
   };
+}
+
+export function normalizeMenuAnalysisResult(input: unknown): MenuAnalysisResult {
+  const parsed = menuAnalysisSchema.parse(input);
+  const categories = Object.fromEntries(
+    Object.entries(parsed.categories).map(([categoryKey, category]) => [
+      categoryKey,
+      {
+        ...category,
+        items: category.items.map((item, index) => {
+          const itemId = item.id?.trim() || buildAnalysisItemId(categoryKey, index, item);
+          const fix = item.fix
+            ? {
+                ...item.fix,
+                id: item.fix.id?.trim() || `${itemId}-fix`,
+              }
+            : null;
+
+          return {
+            ...item,
+            id: itemId,
+            fix,
+          };
+        }),
+      },
+    ])
+  ) as MenuAnalysisResult["categories"];
+
+  return {
+    overallScore: parsed.overallScore,
+    categories,
+  };
+}
+
+function buildAnalysisItemId(
+  categoryKey: string,
+  index: number,
+  item: z.infer<typeof analysisItemSchema>
+) {
+  const target = item.menuItemId ?? item.menuItemName ?? item.message;
+  return `${categoryKey}-${index}-${slugify(target)}`;
+}
+
+function slugify(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48) || "issue";
 }
