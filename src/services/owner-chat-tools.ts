@@ -37,20 +37,23 @@ export const OWNER_TOOLS: Anthropic.Tool[] = [
   {
     name: "get_menu_overview",
     description:
-      "Get an overview of the restaurant's menu: section names, item counts, price ranges, description coverage, and image coverage stats.",
+      "Get an overview of a restaurant's menu: section names, item counts, price ranges, description coverage, and image coverage stats. For portfolio owners, pass restaurant_id to query a different brand.",
     input_schema: {
       type: "object" as const,
-      properties: {},
+      properties: {
+        restaurant_id: { type: "string", description: "Optional. Query a different brand (portfolio only). Defaults to the current restaurant." },
+      },
       required: [],
     },
   },
   {
     name: "search_menu_items",
     description:
-      "Search and filter menu items by name, section, price range, dietary tag, image status, or description quality.",
+      "Search and filter menu items by name, section, price range, dietary tag, image status, or description quality. For portfolio owners, pass restaurant_id to query a different brand.",
     input_schema: {
       type: "object" as const,
       properties: {
+        restaurant_id: { type: "string", description: "Optional. Query a different brand (portfolio only)." },
         query: { type: "string", description: "Search in item names and descriptions" },
         section: { type: "string", description: "Filter by section name" },
         min_price: { type: "number", description: "Minimum price in AED" },
@@ -65,10 +68,12 @@ export const OWNER_TOOLS: Anthropic.Tool[] = [
   {
     name: "get_analytics",
     description:
-      "Get restaurant analytics: page views, WhatsApp clicks, likes, top items, and estimated cart order revenue.",
+      "Get restaurant analytics: page views, WhatsApp clicks, likes, top items, and estimated cart order revenue. For portfolio owners, pass restaurant_id to query a different brand.",
     input_schema: {
       type: "object" as const,
-      properties: {},
+      properties: {
+        restaurant_id: { type: "string", description: "Optional. Query a different brand (portfolio only)." },
+      },
       required: [],
     },
   },
@@ -85,20 +90,24 @@ export const OWNER_TOOLS: Anthropic.Tool[] = [
   {
     name: "get_dietary_tag_status",
     description:
-      "Get dietary tag coverage: how many items are tagged vs untagged, and the distribution of tags.",
+      "Get dietary tag coverage: how many items are tagged vs untagged, and the distribution of tags. For portfolio owners, pass restaurant_id to query a different brand.",
     input_schema: {
       type: "object" as const,
-      properties: {},
+      properties: {
+        restaurant_id: { type: "string", description: "Optional. Query a different brand (portfolio only)." },
+      },
       required: [],
     },
   },
   {
     name: "get_image_status",
     description:
-      "Get image coverage: items with images, without images, generating, or failed.",
+      "Get image coverage: items with images, without images, generating, or failed. For portfolio owners, pass restaurant_id to query a different brand.",
     input_schema: {
       type: "object" as const,
-      properties: {},
+      properties: {
+        restaurant_id: { type: "string", description: "Optional. Query a different brand (portfolio only)." },
+      },
       required: [],
     },
   },
@@ -135,7 +144,7 @@ export const OWNER_TOOLS: Anthropic.Tool[] = [
   {
     name: "get_portfolio_overview",
     description:
-      "Get an overview of all brands in the portfolio with key stats. Portfolio tier only.",
+      "Get an overview of all brands in the portfolio with key stats including item counts, image coverage, and description coverage per brand. Portfolio tier only.",
     input_schema: {
       type: "object" as const,
       properties: {},
@@ -365,6 +374,37 @@ function formatPrice(value: number | string | { toString(): string }): string {
   return `AED ${Number(value.toString()).toFixed(2)}`;
 }
 
+/**
+ * For portfolio users, read tools can target a different brand by passing
+ * `restaurant_id`. This validates the target brand belongs to the same
+ * operator account as the current restaurant.
+ */
+async function resolveTargetRestaurantId(
+  currentRestaurantId: string,
+  clerkId: string,
+  input: Input
+): Promise<string> {
+  const targetId = input.restaurant_id ? String(input.restaurant_id) : null;
+  if (!targetId || targetId === currentRestaurantId) {
+    return currentRestaurantId;
+  }
+
+  // Verify the target brand belongs to the same owner
+  const target = await prisma.restaurant.findFirst({
+    where: {
+      id: targetId,
+      owner: { clerkId },
+    },
+    select: { id: true },
+  });
+
+  if (!target) {
+    throw new Error("Restaurant not found or not owned by you.");
+  }
+
+  return target.id;
+}
+
 export async function executeTool(
   toolName: string,
   restaurantId: string,
@@ -373,19 +413,31 @@ export async function executeTool(
   input: Input
 ): Promise<ToolResult> {
   try {
+    // For read tools that support cross-brand queries, resolve the target
+    const crossBrandTools = new Set([
+      "get_menu_overview",
+      "search_menu_items",
+      "get_analytics",
+      "get_dietary_tag_status",
+      "get_image_status",
+    ]);
+    const targetId = crossBrandTools.has(toolName)
+      ? await resolveTargetRestaurantId(restaurantId, clerkId, input)
+      : restaurantId;
+
     switch (toolName) {
       case "get_menu_overview":
-        return await execGetMenuOverview(restaurantId);
+        return await execGetMenuOverview(targetId);
       case "search_menu_items":
-        return await execSearchMenuItems(restaurantId, input);
+        return await execSearchMenuItems(targetId, input);
       case "get_analytics":
-        return await execGetAnalytics(restaurantId);
+        return await execGetAnalytics(targetId);
       case "get_menu_health":
         return await execGetMenuHealth(restaurantId, entitlements);
       case "get_dietary_tag_status":
-        return await execGetDietaryTagStatus(restaurantId);
+        return await execGetDietaryTagStatus(targetId);
       case "get_image_status":
-        return await execGetImageStatus(restaurantId);
+        return await execGetImageStatus(targetId);
       case "get_promotion_list":
         return await execGetPromotionList(restaurantId);
       case "get_restaurant_info":
@@ -856,9 +908,6 @@ async function execGetPortfolioOverview(
               cuisineType: true,
               location: true,
               isPublished: true,
-              _count: {
-                select: { menuSections: true },
-              },
             },
           },
         },
@@ -870,20 +919,47 @@ async function execGetPortfolioOverview(
     return { content: JSON.stringify({ error: "No portfolio account found." }) };
   }
 
+  // Fetch per-brand item stats in parallel
+  const brandStats = await Promise.all(
+    user.operatorAccount.brands.map(async (brand) => {
+      const items = await prisma.menuItem.findMany({
+        where: { restaurantId: brand.id },
+        select: {
+          imageUrl: true,
+          description: true,
+        },
+      });
+
+      const totalItems = items.length;
+      const withImage = items.filter((i) => i.imageUrl).length;
+      const withDescription = items.filter((i) => i.description && i.description.length > 0).length;
+      const sections = await prisma.menuSection.count({ where: { restaurantId: brand.id } });
+
+      return {
+        id: brand.id,
+        name: brand.name,
+        slug: brand.slug,
+        cuisine: brand.cuisineType,
+        location: brand.location,
+        published: brand.isPublished,
+        sectionCount: sections,
+        totalItems,
+        itemsWithImages: withImage,
+        itemsWithoutImages: totalItems - withImage,
+        imageCoverage: totalItems ? `${Math.round((withImage / totalItems) * 100)}%` : "N/A",
+        itemsWithDescriptions: withDescription,
+        itemsWithoutDescriptions: totalItems - withDescription,
+        descriptionCoverage: totalItems ? `${Math.round((withDescription / totalItems) * 100)}%` : "N/A",
+      };
+    })
+  );
+
   return {
     content: JSON.stringify({
       operatorName: user.operatorAccount.name,
       brandCount: user.operatorAccount.brands.length,
       brandLimit: user.operatorAccount.brandLimit,
-      brands: user.operatorAccount.brands.map((b) => ({
-        id: b.id,
-        name: b.name,
-        slug: b.slug,
-        cuisine: b.cuisineType,
-        location: b.location,
-        published: b.isPublished,
-        sectionCount: b._count.menuSections,
-      })),
+      brands: brandStats,
     }),
   };
 }
