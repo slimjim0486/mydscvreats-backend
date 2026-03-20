@@ -69,7 +69,7 @@ const INJECTION_PATTERNS = [
 ];
 
 const INJECTION_REFUSAL =
-  "I'm MyDscvr, your restaurant assistant! How can I help you manage your restaurant today?";
+  "I'm Sous Chef, your restaurant assistant! How can I help you manage your restaurant today?";
 
 function checkInjection(message: string): string | null {
   for (const pattern of INJECTION_PATTERNS) {
@@ -146,7 +146,7 @@ export const ownerChatRoute = new Hono<{
     // Entitlement gate: require Pro or Portfolio
     if (!entitlements.menuAssistantEnabled) {
       throw new ApiError(
-        "Ask MyDscvr is available on Pro and Portfolio plans. Upgrade to unlock your AI assistant.",
+        "Sous Chef is available on Pro and Portfolio plans. Upgrade to unlock your AI assistant.",
         403
       );
     }
