@@ -22,6 +22,7 @@ const envSchema = z.object({
   CLERK_JWT_ISSUER: z.string().optional(),
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
+  BACKEND_WEBHOOK_SYNC_SECRET: z.string().min(32).optional(),
   STRIPE_STARTER_PRICE_ID: z.string().optional(),
   STRIPE_PRO_PRICE_ID: z.string().optional(),
   STRIPE_PORTFOLIO_PRICE_ID: z.string().optional(),

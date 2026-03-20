@@ -3,6 +3,7 @@ import { z } from "zod";
 import { ApiError } from "@/lib/errors";
 import { errorResponse } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
+import { verifyWebhookSyncRequest } from "@/lib/webhook-sync";
 import { getCurrentUser, requireAuth } from "@/middleware/auth";
 import {
   cancelStripeSubscription,
@@ -344,11 +345,21 @@ export const subscriptionsRoute = new Hono<{
   })
   .post("/webhook", async (c) => {
     try {
-      if (c.req.header("x-stripe-webhook-secret") !== process.env.STRIPE_WEBHOOK_SECRET) {
-        throw new ApiError("Unauthorized webhook sync request", 401);
+      const rawPayload = await c.req.text();
+      verifyWebhookSyncRequest({
+        payload: rawPayload,
+        signatureHeader: c.req.header("x-webhook-signature"),
+        timestampHeader: c.req.header("x-webhook-timestamp"),
+      });
+
+      let jsonPayload: unknown;
+      try {
+        jsonPayload = JSON.parse(rawPayload);
+      } catch {
+        throw new ApiError("Invalid JSON payload", 400);
       }
 
-      const payload = webhookSchema.parse(await c.req.json());
+      const payload = webhookSchema.parse(jsonPayload);
 
       switch (payload.type) {
         case "checkout.session.completed": {
