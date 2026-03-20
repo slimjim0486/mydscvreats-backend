@@ -19,6 +19,7 @@ import { shortLinksRoute } from "@/routes/short-links";
 import { subscriptionsRoute } from "@/routes/subscriptions";
 import { uploadRoute } from "@/routes/upload";
 import { gbpRoute } from "@/routes/gbp";
+import { ownerChatRoute } from "@/routes/owner-chat";
 import { menuPrintRoute, pdfExportRoute } from "@/routes/pdf-export";
 import { whatsappRoute } from "@/routes/whatsapp";
 
@@ -43,6 +44,7 @@ app.route("/api/menu", menuRoute);
 app.route("/api/menu", aiRoute);
 app.route("/api/menu-source-images", menuSourceImagesRoute);
 app.route("/api/chat", chatRoute);
+app.route("/api/owner-chat", ownerChatRoute);
 app.route("/api/ai", aiFeaturesRoute);
 app.route("/api/dietary-tags", dietaryTagsRoute);
 app.route("/api/menu-badges", menuBadgesRoute);

@@ -5,7 +5,8 @@ export type AiFeature =
   | "description_enhance"
   | "tag_analysis"
   | "menu_analysis"
-  | "image_enhancement";
+  | "image_enhancement"
+  | "owner_chat";
 
 export async function checkAiLimit(
   restaurantId: string,
