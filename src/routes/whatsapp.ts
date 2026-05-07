@@ -42,6 +42,16 @@ const cartRedirectSchema = z.object({
     .transform((value) => value.toUpperCase()),
   path: z.string().max(255).optional(),
   campaign: z.string().max(120).optional(),
+  customer: z
+    .object({
+      name: z.string().trim().min(2).max(120),
+      phoneNumber: z.string().trim().min(8).max(32),
+      fulfillmentMethod: z.enum(["delivery", "pickup"]),
+      address: z.string().trim().max(240).optional(),
+      notes: z.string().trim().max(300).optional(),
+      marketingConsent: z.boolean().default(false),
+    })
+    .optional(),
 });
 
 function normalizeWhatsappNumber(value: string | null | undefined) {
@@ -49,6 +59,11 @@ function normalizeWhatsappNumber(value: string | null | undefined) {
     return null;
   }
 
+  const digitsOnly = value.replace(/\D/g, "");
+  return digitsOnly.length >= 8 ? digitsOnly : null;
+}
+
+function normalizeCustomerPhone(value: string) {
   const digitsOnly = value.replace(/\D/g, "");
   return digitsOnly.length >= 8 ? digitsOnly : null;
 }
@@ -103,10 +118,19 @@ function buildCartWhatsappMessage(input: {
   currency: string;
   items: Array<{ name: string; quantity: number; lineTotal: number }>;
   totalPrice: number;
+  customer?: {
+    name: string;
+    phoneNumber: string;
+    fulfillmentMethod: "delivery" | "pickup";
+    address?: string;
+    notes?: string;
+  };
 }) {
   const itemLines = input.items.map(
     (item) => `${item.quantity}x ${item.name} - ${formatWhatsappMoney(item.lineTotal, input.currency)}`
   );
+  const fulfillmentLabel =
+    input.customer?.fulfillmentMethod === "pickup" ? "Pickup" : "Delivery";
 
   return [
     `New Order from mydscvr.ai/${input.slug}`,
@@ -115,9 +139,11 @@ function buildCartWhatsappMessage(input: {
     "",
     `Total: ${formatWhatsappMoney(input.totalPrice, input.currency)}`,
     "",
-    "Name: ___",
-    "Delivery/Pickup: ___",
-    "Address: ___",
+    `Name: ${input.customer?.name ?? "___"}`,
+    `Phone: ${input.customer?.phoneNumber ?? "___"}`,
+    `Delivery/Pickup: ${input.customer ? fulfillmentLabel : "___"}`,
+    `Address/Area: ${input.customer?.address || "___"}`,
+    input.customer?.notes ? `Notes: ${input.customer.notes}` : "Notes: ___",
   ].join("\n");
 }
 
@@ -375,10 +401,72 @@ export const whatsappRoute = new Hono()
         currency,
         items: orderItems,
         totalPrice,
+        customer: payload.customer,
       });
 
       try {
         await prisma.$transaction(async (tx) => {
+          let customerId: string | null = null;
+          const normalizedCustomerPhone = payload.customer
+            ? normalizeCustomerPhone(payload.customer.phoneNumber)
+            : null;
+
+          if (payload.customer && normalizedCustomerPhone) {
+            const capturedAt = new Date();
+            const customer = await tx.customer.upsert({
+              where: {
+                restaurantId_normalizedPhone: {
+                  restaurantId: restaurant.id,
+                  normalizedPhone: normalizedCustomerPhone,
+                },
+              },
+              create: {
+                restaurantId: restaurant.id,
+                normalizedPhone: normalizedCustomerPhone,
+                phoneNumber: payload.customer.phoneNumber,
+                displayName: payload.customer.name,
+                marketingOptIn: payload.customer.marketingConsent,
+                marketingOptInAt: payload.customer.marketingConsent ? capturedAt : null,
+                marketingOptOutAt: payload.customer.marketingConsent ? null : capturedAt,
+                lastOrderAt: capturedAt,
+                orderCount: 1,
+                totalSpend: totalPrice,
+                currency,
+              },
+              update: {
+                phoneNumber: payload.customer.phoneNumber,
+                displayName: payload.customer.name,
+                marketingOptIn: payload.customer.marketingConsent,
+                marketingOptInAt: payload.customer.marketingConsent ? capturedAt : undefined,
+                marketingOptOutAt: payload.customer.marketingConsent ? null : capturedAt,
+                lastOrderAt: capturedAt,
+                orderCount: {
+                  increment: 1,
+                },
+                totalSpend: {
+                  increment: totalPrice,
+                },
+                currency,
+              },
+              select: {
+                id: true,
+              },
+            });
+
+            customerId = customer.id;
+
+            await tx.customerConsent.create({
+              data: {
+                restaurantId: restaurant.id,
+                customerId: customer.id,
+                status: payload.customer.marketingConsent ? "opt_in" : "opt_out",
+                source: "public_checkout",
+                ipAddress: clientIp,
+                userAgent: c.req.header("user-agent") ?? null,
+              },
+            });
+          }
+
           const click = await tx.whatsAppClick.create({
             data: {
               restaurantId: restaurant.id,
@@ -406,6 +494,34 @@ export const whatsappRoute = new Hono()
               },
             },
           });
+
+          if (payload.customer) {
+            await tx.orderIntent.create({
+              data: {
+                restaurantId: restaurant.id,
+                customerId,
+                clickId: click.id,
+                fulfillmentMethod: payload.customer.fulfillmentMethod,
+                customerName: payload.customer.name,
+                phoneNumber: payload.customer.phoneNumber,
+                address: payload.customer.address || null,
+                notes: payload.customer.notes || null,
+                totalPrice,
+                currency,
+                itemCount,
+                sourcePath: payload.path ?? null,
+                campaign: payload.campaign ?? null,
+                items: {
+                  create: orderItems.map((item) => ({
+                    menuItemId: item.menuItemId,
+                    itemName: item.name,
+                    quantity: item.quantity,
+                    unitPrice: item.unitPrice,
+                  })),
+                },
+              },
+            });
+          }
         });
       } catch (error) {
         console.error("Failed to record WhatsApp cart order", error);

@@ -63,6 +63,37 @@ enum MenuSourceImageReviewStatus {
   dismissed
 }
 
+enum CustomerConsentStatus {
+  opt_in
+  opt_out
+}
+
+enum OrderFulfillmentMethod {
+  delivery
+  pickup
+}
+
+enum OrderIntentStatus {
+  sent_to_whatsapp
+  opened_whatsapp
+}
+
+enum CampaignType {
+  inactive_30
+  weekend_special
+  new_promotion
+}
+
+enum CampaignStatus {
+  draft
+  logged
+}
+
+enum MessageLogStatus {
+  logged
+  skipped_opt_out
+}
+
 model User {
   id        String   @id @default(cuid())
   clerkId   String   @unique @map("clerk_id")
@@ -105,8 +136,8 @@ model Restaurant {
   createdAt          DateTime           @default(now()) @map("created_at")
   updatedAt          DateTime           @updatedAt @map("updated_at")
 
-  owner                     User                      @relation(fields: [ownerId], references: [id])
-  operatorAccount           OperatorAccount?          @relation(fields: [operatorAccountId], references: [id], onDelete: SetNull)
+  owner                     User                       @relation(fields: [ownerId], references: [id])
+  operatorAccount           OperatorAccount?           @relation(fields: [operatorAccountId], references: [id], onDelete: SetNull)
   menuSections              MenuSection[]
   menuItems                 MenuItem[]
   subscription              Subscription?
@@ -117,11 +148,16 @@ model Restaurant {
   shortLinkClicks           RestaurantShortLinkClick[]
   whatsappClicks            WhatsAppClick[]
   whatsappCartOrders        WhatsAppCartOrder[]
+  customers                 Customer[]
+  customerConsents          CustomerConsent[]
+  orderIntents              OrderIntent[]
+  campaigns                 Campaign[]
+  messageLogs               MessageLog[]
   menuItemLikes             MenuItemLike[]
   menuSourceImageCandidates MenuSourceImageCandidate[]
   slugAliases               RestaurantSlugAlias[]
-  promotions     Promotion[]
-  gbpConnection  GbpConnection?
+  promotions                Promotion[]
+  gbpConnection             GbpConnection?
 
   @@index([ownerId])
   @@index([operatorAccountId])
@@ -144,35 +180,36 @@ model MenuSection {
 }
 
 model MenuItem {
-  id                  String   @id @default(cuid())
-  sectionId           String   @map("section_id")
-  restaurantId        String   @map("restaurant_id")
+  id                  String    @id @default(cuid())
+  sectionId           String    @map("section_id")
+  restaurantId        String    @map("restaurant_id")
   name                String
   description         String?
-  aiNotes             String?  @map("ai_notes")
-  price               Decimal  @db.Decimal(10, 2)
-  currency            String   @default("AED")
-  imageUrl            String?  @map("image_url")
-  imageStatus         String   @default("none") @map("image_status")
-  isAvailable         Boolean  @default(true) @map("is_available")
+  aiNotes             String?   @map("ai_notes")
+  price               Decimal   @db.Decimal(10, 2)
+  currency            String    @default("AED")
+  imageUrl            String?   @map("image_url")
+  imageStatus         String    @default("none") @map("image_status")
+  isAvailable         Boolean   @default(true) @map("is_available")
   soldOutDate         DateTime? @map("sold_out_date") @db.Date
   specialStartsAt     DateTime? @map("special_starts_at")
   specialEndsAt       DateTime? @map("special_ends_at")
-  displayOrder        Int      @default(0) @map("display_order")
-  aiDescriptionStatus String?  @map("ai_description_status")
-  originalDescription String?  @map("original_description")
-  createdAt           DateTime @default(now()) @map("created_at")
-  updatedAt           DateTime @updatedAt @map("updated_at")
+  displayOrder        Int       @default(0) @map("display_order")
+  aiDescriptionStatus String?   @map("ai_description_status")
+  originalDescription String?   @map("original_description")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
 
-  section     MenuSection          @relation(fields: [sectionId], references: [id], onDelete: Cascade)
-  restaurant  Restaurant           @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  images      MenuItemImage[]
-  dietaryTags MenuItemDietaryTag[]
-  badges      MenuItemBadge[]
-  promotionItems PromotionItem[]
-  whatsappClicks WhatsAppClick[]
-  whatsappCartOrderItems WhatsAppCartOrderItem[]
-  likes       MenuItemLike[]
+  section                   MenuSection                @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  restaurant                Restaurant                 @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  images                    MenuItemImage[]
+  dietaryTags               MenuItemDietaryTag[]
+  badges                    MenuItemBadge[]
+  promotionItems            PromotionItem[]
+  whatsappClicks            WhatsAppClick[]
+  whatsappCartOrderItems    WhatsAppCartOrderItem[]
+  orderIntentItems          OrderIntentItem[]
+  likes                     MenuItemLike[]
   suggestedMenuSourceImages MenuSourceImageCandidate[] @relation("SuggestedMenuSourceImageCandidate")
   assignedMenuSourceImages  MenuSourceImageCandidate[] @relation("AssignedMenuSourceImageCandidate")
 
@@ -195,9 +232,9 @@ model MenuItemImage {
   createdAt      DateTime                @default(now()) @map("created_at")
   updatedAt      DateTime                @updatedAt @map("updated_at")
 
-  menuItem      MenuItem         @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
-  parentImage   MenuItemImage?   @relation("MenuItemImageDerivation", fields: [parentImageId], references: [id], onDelete: SetNull)
-  derivedImages MenuItemImage[]  @relation("MenuItemImageDerivation")
+  menuItem         MenuItem                   @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  parentImage      MenuItemImage?             @relation("MenuItemImageDerivation", fields: [parentImageId], references: [id], onDelete: SetNull)
+  derivedImages    MenuItemImage[]            @relation("MenuItemImageDerivation")
   sourceCandidates MenuSourceImageCandidate[]
 
   @@unique([menuItemId, slot])
@@ -207,28 +244,28 @@ model MenuItemImage {
 }
 
 model MenuSourceImageCandidate {
-  id                 String                      @id @default(cuid())
-  restaurantId       String                      @map("restaurant_id")
-  imageUrl           String                      @map("image_url")
-  sourcePageImageUrl String?                     @map("source_page_image_url")
-  sourcePageNumber   Int                         @map("source_page_number")
-  cropX              Float?                      @map("crop_x")
-  cropY              Float?                      @map("crop_y")
-  cropWidth          Float?                      @map("crop_width")
-  cropHeight         Float?                      @map("crop_height")
-  textOverlapScore   Float?                      @map("text_overlap_score")
-  confidence         Float
-  note               String?
-  reviewStatus       MenuSourceImageReviewStatus @default(pending) @map("review_status")
-  suggestedMenuItemId String?                    @map("suggested_menu_item_id")
-  assignedMenuItemId  String?                    @map("assigned_menu_item_id")
-  linkedImageId      String?                     @map("linked_image_id")
-  createdAt          DateTime                    @default(now()) @map("created_at")
-  updatedAt          DateTime                    @updatedAt @map("updated_at")
+  id                  String                      @id @default(cuid())
+  restaurantId        String                      @map("restaurant_id")
+  imageUrl            String                      @map("image_url")
+  sourcePageImageUrl  String?                     @map("source_page_image_url")
+  sourcePageNumber    Int                         @map("source_page_number")
+  cropX               Float?                      @map("crop_x")
+  cropY               Float?                      @map("crop_y")
+  cropWidth           Float?                      @map("crop_width")
+  cropHeight          Float?                      @map("crop_height")
+  textOverlapScore    Float?                      @map("text_overlap_score")
+  confidence          Float
+  note                String?
+  reviewStatus        MenuSourceImageReviewStatus @default(pending) @map("review_status")
+  suggestedMenuItemId String?                     @map("suggested_menu_item_id")
+  assignedMenuItemId  String?                     @map("assigned_menu_item_id")
+  linkedImageId       String?                     @map("linked_image_id")
+  createdAt           DateTime                    @default(now()) @map("created_at")
+  updatedAt           DateTime                    @updatedAt @map("updated_at")
 
-  restaurant        Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  suggestedMenuItem MenuItem?     @relation("SuggestedMenuSourceImageCandidate", fields: [suggestedMenuItemId], references: [id], onDelete: SetNull)
-  assignedMenuItem  MenuItem?     @relation("AssignedMenuSourceImageCandidate", fields: [assignedMenuItemId], references: [id], onDelete: SetNull)
+  restaurant        Restaurant     @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  suggestedMenuItem MenuItem?      @relation("SuggestedMenuSourceImageCandidate", fields: [suggestedMenuItemId], references: [id], onDelete: SetNull)
+  assignedMenuItem  MenuItem?      @relation("AssignedMenuSourceImageCandidate", fields: [assignedMenuItemId], references: [id], onDelete: SetNull)
   linkedImage       MenuItemImage? @relation(fields: [linkedImageId], references: [id], onDelete: SetNull)
 
   @@index([restaurantId, reviewStatus, createdAt])
@@ -239,26 +276,27 @@ model MenuSourceImageCandidate {
 }
 
 model Promotion {
-  id          String        @id @default(cuid())
-  restaurantId String       @map("restaurant_id")
-  type        PromotionType
-  title       String
-  subtitle    String?
-  description String?
-  badgeLabel  String?       @map("badge_label")
-  terms       String?
-  promoPrice  Decimal?      @map("promo_price") @db.Decimal(10, 2)
-  startsAt    DateTime?     @map("starts_at")
-  endsAt      DateTime?     @map("ends_at")
-  isActive    Boolean       @default(true) @map("is_active")
-  isFeatured  Boolean       @default(true) @map("is_featured")
-  displayOrder Int          @default(0) @map("display_order")
-  createdAt   DateTime      @default(now()) @map("created_at")
-  updatedAt   DateTime      @updatedAt @map("updated_at")
+  id           String        @id @default(cuid())
+  restaurantId String        @map("restaurant_id")
+  type         PromotionType
+  title        String
+  subtitle     String?
+  description  String?
+  badgeLabel   String?       @map("badge_label")
+  terms        String?
+  promoPrice   Decimal?      @map("promo_price") @db.Decimal(10, 2)
+  startsAt     DateTime?     @map("starts_at")
+  endsAt       DateTime?     @map("ends_at")
+  isActive     Boolean       @default(true) @map("is_active")
+  isFeatured   Boolean       @default(true) @map("is_featured")
+  displayOrder Int           @default(0) @map("display_order")
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
 
-  restaurant Restaurant      @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  items      PromotionItem[]
+  restaurant     Restaurant      @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  items          PromotionItem[]
   whatsappClicks WhatsAppClick[]
+  campaigns      Campaign[]
 
   @@index([restaurantId, displayOrder])
   @@index([restaurantId, isActive, startsAt, endsAt])
@@ -266,15 +304,15 @@ model Promotion {
 }
 
 model PromotionItem {
-  id          String   @id @default(cuid())
-  promotionId String   @map("promotion_id")
-  menuItemId  String   @map("menu_item_id")
-  role        String   @default("included")
-  displayOrder Int     @default(0) @map("display_order")
-  createdAt   DateTime @default(now()) @map("created_at")
+  id           String   @id @default(cuid())
+  promotionId  String   @map("promotion_id")
+  menuItemId   String   @map("menu_item_id")
+  role         String   @default("included")
+  displayOrder Int      @default(0) @map("display_order")
+  createdAt    DateTime @default(now()) @map("created_at")
 
   promotion Promotion @relation(fields: [promotionId], references: [id], onDelete: Cascade)
-  menuItem   MenuItem  @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  menuItem  MenuItem  @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
 
   @@unique([promotionId, menuItemId])
   @@index([menuItemId, displayOrder])
@@ -380,21 +418,22 @@ model MenuItemLike {
 }
 
 model WhatsAppClick {
-  id          String    @id @default(cuid())
+  id           String   @id @default(cuid())
   restaurantId String   @map("restaurant_id")
-  menuItemId  String?   @map("menu_item_id")
-  promotionId String?   @map("promotion_id")
-  source      String
-  path        String?
-  campaign    String?
-  referrer    String?
-  userAgent   String?   @map("user_agent")
-  createdAt   DateTime  @default(now()) @map("created_at")
+  menuItemId   String?  @map("menu_item_id")
+  promotionId  String?  @map("promotion_id")
+  source       String
+  path         String?
+  campaign     String?
+  referrer     String?
+  userAgent    String?  @map("user_agent")
+  createdAt    DateTime @default(now()) @map("created_at")
 
-  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  menuItem   MenuItem?  @relation(fields: [menuItemId], references: [id], onDelete: SetNull)
-  promotion  Promotion? @relation(fields: [promotionId], references: [id], onDelete: SetNull)
-  cartOrder  WhatsAppCartOrder?
+  restaurant  Restaurant         @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  menuItem    MenuItem?          @relation(fields: [menuItemId], references: [id], onDelete: SetNull)
+  promotion   Promotion?         @relation(fields: [promotionId], references: [id], onDelete: SetNull)
+  cartOrder   WhatsAppCartOrder?
+  orderIntent OrderIntent?
 
   @@index([restaurantId, createdAt])
   @@index([menuItemId, createdAt])
@@ -411,8 +450,8 @@ model WhatsAppCartOrder {
   itemCount    Int      @map("item_count")
   createdAt    DateTime @default(now()) @map("created_at")
 
-  restaurant Restaurant             @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  click      WhatsAppClick          @relation(fields: [clickId], references: [id], onDelete: Cascade)
+  restaurant Restaurant              @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  click      WhatsAppClick           @relation(fields: [clickId], references: [id], onDelete: Cascade)
   items      WhatsAppCartOrderItem[]
 
   @@index([restaurantId, createdAt])
@@ -433,6 +472,143 @@ model WhatsAppCartOrderItem {
   @@index([orderId])
   @@index([menuItemId])
   @@map("whatsapp_cart_order_items")
+}
+
+model Customer {
+  id                String    @id @default(cuid())
+  restaurantId      String    @map("restaurant_id")
+  normalizedPhone   String    @map("normalized_phone")
+  phoneNumber       String    @map("phone_number")
+  displayName       String    @map("display_name")
+  marketingOptIn    Boolean   @default(false) @map("marketing_opt_in")
+  marketingOptInAt  DateTime? @map("marketing_opt_in_at")
+  marketingOptOutAt DateTime? @map("marketing_opt_out_at")
+  lastOrderAt       DateTime? @map("last_order_at")
+  orderCount        Int       @default(0) @map("order_count")
+  totalSpend        Decimal   @default(0) @map("total_spend") @db.Decimal(10, 2)
+  currency          String    @default("AED")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  restaurant Restaurant        @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  consents   CustomerConsent[]
+  orders     OrderIntent[]
+  messages   MessageLog[]
+
+  @@unique([restaurantId, normalizedPhone])
+  @@index([restaurantId, marketingOptIn])
+  @@index([restaurantId, lastOrderAt])
+  @@map("customers")
+}
+
+model CustomerConsent {
+  id           String                @id @default(cuid())
+  restaurantId String                @map("restaurant_id")
+  customerId   String                @map("customer_id")
+  status       CustomerConsentStatus
+  channel      String                @default("whatsapp")
+  source       String
+  ipAddress    String?               @map("ip_address")
+  userAgent    String?               @map("user_agent")
+  createdAt    DateTime              @default(now()) @map("created_at")
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  customer   Customer   @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([restaurantId, createdAt])
+  @@index([customerId, createdAt])
+  @@map("customer_consents")
+}
+
+model OrderIntent {
+  id                String                 @id @default(cuid())
+  restaurantId      String                 @map("restaurant_id")
+  customerId        String?                @map("customer_id")
+  clickId           String?                @unique @map("click_id")
+  status            OrderIntentStatus      @default(sent_to_whatsapp)
+  fulfillmentMethod OrderFulfillmentMethod @map("fulfillment_method")
+  customerName      String                 @map("customer_name")
+  phoneNumber       String                 @map("phone_number")
+  address           String?
+  notes             String?
+  totalPrice        Decimal                @map("total_price") @db.Decimal(10, 2)
+  currency          String                 @default("AED")
+  itemCount         Int                    @map("item_count")
+  sourcePath        String?                @map("source_path")
+  campaign          String?
+  createdAt         DateTime               @default(now()) @map("created_at")
+
+  restaurant Restaurant        @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  customer   Customer?         @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  click      WhatsAppClick?    @relation(fields: [clickId], references: [id], onDelete: SetNull)
+  items      OrderIntentItem[]
+
+  @@index([restaurantId, createdAt])
+  @@index([customerId, createdAt])
+  @@map("order_intents")
+}
+
+model OrderIntentItem {
+  id            String   @id @default(cuid())
+  orderIntentId String   @map("order_intent_id")
+  menuItemId    String?  @map("menu_item_id")
+  itemName      String   @map("item_name")
+  quantity      Int
+  unitPrice     Decimal  @map("unit_price") @db.Decimal(10, 2)
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  orderIntent OrderIntent @relation(fields: [orderIntentId], references: [id], onDelete: Cascade)
+  menuItem    MenuItem?   @relation(fields: [menuItemId], references: [id], onDelete: SetNull)
+
+  @@index([orderIntentId])
+  @@index([menuItemId])
+  @@map("order_intent_items")
+}
+
+model Campaign {
+  id            String         @id @default(cuid())
+  restaurantId  String         @map("restaurant_id")
+  promotionId   String?        @map("promotion_id")
+  type          CampaignType
+  status        CampaignStatus @default(draft)
+  name          String
+  templateName  String         @map("template_name")
+  body          String
+  targetSegment String         @map("target_segment")
+  targetCount   Int            @default(0) @map("target_count")
+  loggedCount   Int            @default(0) @map("logged_count")
+  createdAt     DateTime       @default(now()) @map("created_at")
+  loggedAt      DateTime?      @map("logged_at")
+
+  restaurant Restaurant   @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  promotion  Promotion?   @relation(fields: [promotionId], references: [id], onDelete: SetNull)
+  messages   MessageLog[]
+
+  @@index([restaurantId, createdAt])
+  @@index([promotionId])
+  @@map("campaigns")
+}
+
+model MessageLog {
+  id           String           @id @default(cuid())
+  restaurantId String           @map("restaurant_id")
+  customerId   String?          @map("customer_id")
+  campaignId   String?          @map("campaign_id")
+  channel      String           @default("whatsapp")
+  direction    String           @default("outbound")
+  status       MessageLogStatus @default(logged)
+  body         String
+  whatsappUrl  String?          @map("whatsapp_url")
+  createdAt    DateTime         @default(now()) @map("created_at")
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  customer   Customer?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  campaign   Campaign?  @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+
+  @@index([restaurantId, createdAt])
+  @@index([customerId, createdAt])
+  @@index([campaignId])
+  @@map("message_logs")
 }
 
 model RestaurantDomain {
@@ -471,7 +647,7 @@ model RestaurantShortLink {
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
-  restaurant Restaurant                     @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  restaurant Restaurant                 @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   aliases    RestaurantShortLinkAlias[]
   clicks     RestaurantShortLinkClick[]
 
@@ -508,14 +684,14 @@ model RestaurantShortLinkClick {
 }
 
 model BadgeType {
-  id       String          @id @default(cuid())
-  key      String          @unique
-  label    String
-  icon     String?
-  color    String          @default("#F2E2B9")
-  textColor String         @default("#7A5211") @map("text_color")
-  category String          @default("promotion")
-  displayOrder Int         @default(0) @map("display_order")
+  id             String          @id @default(cuid())
+  key            String          @unique
+  label          String
+  icon           String?
+  color          String          @default("#F2E2B9")
+  textColor      String          @default("#7A5211") @map("text_color")
+  category       String          @default("promotion")
+  displayOrder   Int             @default(0) @map("display_order")
   menuItemBadges MenuItemBadge[]
 
   @@map("badge_types")
@@ -587,15 +763,15 @@ model AiUsageLog {
 }
 
 model GbpConnection {
-  id            String              @id @default(cuid())
-  restaurantId  String              @unique @map("restaurant_id")
-  status        GbpConnectionStatus @default(not_connected)
-  gbpUrl        String?             @map("gbp_url")
-  placeId       String?             @map("place_id")
-  verifiedAt    DateTime?           @map("verified_at")
-  connectedAt   DateTime?           @map("connected_at")
-  createdAt     DateTime            @default(now()) @map("created_at")
-  updatedAt     DateTime            @updatedAt @map("updated_at")
+  id           String              @id @default(cuid())
+  restaurantId String              @unique @map("restaurant_id")
+  status       GbpConnectionStatus @default(not_connected)
+  gbpUrl       String?             @map("gbp_url")
+  placeId      String?             @map("place_id")
+  verifiedAt   DateTime?           @map("verified_at")
+  connectedAt  DateTime?           @map("connected_at")
+  createdAt    DateTime            @default(now()) @map("created_at")
+  updatedAt    DateTime            @updatedAt @map("updated_at")
 
   restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
 
