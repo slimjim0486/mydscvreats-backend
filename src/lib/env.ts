@@ -23,7 +23,7 @@ const envSchema = z.object({
   R2_ACCOUNT_ID: z.string().optional(),
   R2_ACCESS_KEY_ID: z.string().optional(),
   R2_SECRET_ACCESS_KEY: z.string().optional(),
-  R2_BUCKET_NAME: z.string().default("bustan"),
+  R2_BUCKET_NAME: z.string().default("mydscvr-eats"),
   R2_PUBLIC_URL: z.string().url().default("https://images.getbustan.com"),
   CLERK_SECRET_KEY: z.string().optional(),
   CLERK_JWT_KEY: z.string().optional(),
