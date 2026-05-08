@@ -106,7 +106,7 @@ export async function collectRankGridData(
   const result = await runActor<Record<string, unknown>>(
     env.APIFY_ACTOR_GSEARCH,
     {
-      queries: queryKeys.map((entry) => entry.query),
+      queries: queryKeys.map((entry) => entry.query).join("\n"),
       resultsPerPage: 10,
       maxPagesPerQuery: 1,
       languageCode: "en",

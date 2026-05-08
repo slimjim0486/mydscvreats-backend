@@ -14,7 +14,7 @@ const envSchema = z.object({
   GOOGLE_IMAGE_ALLOW_FALLBACK: z.coerce.boolean().default(false),
   GOOGLE_IMAGE_FALLBACK_MODEL: optionalString(),
   APIFY_API_TOKEN: optionalString(),
-  APIFY_ACTOR_GMAPS: z.string().default("compass/google-maps-scraper"),
+  APIFY_ACTOR_GMAPS: z.string().default("compass/crawler-google-places"),
   APIFY_ACTOR_GMAPS_REVIEWS: z.string().default("compass/google-maps-reviews-scraper"),
   APIFY_ACTOR_GSEARCH: z.string().default("apify/google-search-scraper"),
   APIFY_ACTOR_WEB: z.string().default("apify/website-content-crawler"),
