@@ -25,6 +25,8 @@ export function computeSeoInputsHash(restaurant: RestaurantSeoContext) {
     .update(
       JSON.stringify({
         name: restaurant.name,
+        cuisineType: restaurant.cuisineType,
+        location: restaurant.location,
         address: restaurant.address,
         phone: restaurant.phone,
         website: restaurant.website,
@@ -32,6 +34,7 @@ export function computeSeoInputsHash(restaurant: RestaurantSeoContext) {
         gbpUrl: restaurant.gbpConnection?.gbpUrl ?? null,
         talabatUrl: restaurant.talabatUrl,
         deliverooUrl: restaurant.deliverooUrl,
+        uberEatsUrl: restaurant.uberEatsUrl,
         careemUrl: null,
         operatingHours: restaurant.operatingHours ?? null,
       })
