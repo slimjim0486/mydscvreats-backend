@@ -43,6 +43,7 @@ export async function runActor<T = Record<string, unknown>>(
   const timeout = setTimeout(() => controller.abort(), timeoutMs + 5_000);
 
   try {
+    console.info("Starting Apify actor", { actorId, timeoutMs });
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -54,6 +55,11 @@ export async function runActor<T = Record<string, unknown>>(
 
     if (!response.ok) {
       const text = await response.text().catch(() => "");
+      console.warn("Apify actor failed", {
+        actorId,
+        status: response.status,
+        body: text.slice(0, 500),
+      });
       throw new ApiError(
         `Apify actor ${actorId} failed with ${response.status}${text ? `: ${text.slice(0, 240)}` : ""}`,
         502
@@ -62,6 +68,7 @@ export async function runActor<T = Record<string, unknown>>(
 
     const payload = await response.json();
     const items = Array.isArray(payload) ? payload : [payload];
+    console.info("Apify actor completed", { actorId, itemCount: items.length });
 
     return {
       actorId,

@@ -73,10 +73,12 @@ async function settleCollector<T>(
       estimatedCostUsd: result.estimatedCostUsd,
     };
   } catch (error) {
+    const message = errorMessage(error);
+    console.warn("SEO collector failed", { collector, message });
     return {
       ok: false,
       collector,
-      message: errorMessage(error),
+      message,
     };
   }
 }
