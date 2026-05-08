@@ -25,6 +25,7 @@ import { ownerChatRoute } from "@/routes/owner-chat";
 import { menuPrintRoute, pdfExportRoute } from "@/routes/pdf-export";
 import { whatsappRoute } from "@/routes/whatsapp";
 import { whatsappWebhooksRoute } from "@/routes/whatsapp-webhooks";
+import { clerkWebhooksRoute } from "@/routes/clerk-webhooks";
 
 const app = new Hono();
 
@@ -57,6 +58,7 @@ app.route("/api/analytics", analyticsRoute);
 app.route("/api/upload", uploadRoute);
 app.route("/api/whatsapp", whatsappRoute);
 app.route("/api/webhooks", whatsappWebhooksRoute);
+app.route("/api/webhooks/clerk", clerkWebhooksRoute);
 app.route("/api/gbp", gbpRoute);
 app.route("/api/seo", seoRoute);
 app.route("/api/menu-print", menuPrintRoute);

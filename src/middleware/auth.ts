@@ -90,12 +90,14 @@ export const requireAuth: MiddlewareHandler<{
 };
 
 export async function getCurrentUser(auth: AuthContext) {
+  // The webhook handler (routes/clerk-webhooks.ts) is the canonical source
+  // of truth for email/name. Default Clerk JWTs don't carry email claims, so
+  // this middleware must NOT overwrite a real DB email with the placeholder.
+  // Only update fields when the JWT actually has them.
   return prisma.user.upsert({
-    where: {
-      clerkId: auth.clerkId,
-    },
+    where: { clerkId: auth.clerkId },
     update: {
-      email: auth.email ?? `${auth.clerkId}@clerk.local`,
+      ...(auth.email && { email: auth.email }),
       ...(auth.fullName && { fullName: auth.fullName }),
     },
     create: {
