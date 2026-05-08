@@ -6,16 +6,24 @@ import { prisma } from "@/lib/prisma";
 import {
   WHATSAPP_TEMPLATE_LIBRARY,
   buildTemplateParameters,
+  createWhatsAppTemplate,
   decryptAccessToken,
   encryptAccessToken,
   exchangeEmbeddedSignupCode,
+  extractEmbeddedSignupCustomerAssets,
+  fetchWhatsAppAccountPhoneNumbers,
+  fetchWhatsAppPhoneNumber,
   fetchWhatsAppTemplates,
   getEmbeddedSignupConfig,
   getTokenLastFour,
+  markWhatsAppMessageRead,
   mapTemplateStatus,
   normalizeWhatsAppPhone,
   renderTemplatePreview,
+  registerWhatsAppPhoneNumber,
+  sendWhatsAppText,
   sendWhatsAppTemplate,
+  subscribeWhatsAppBusinessAccount,
 } from "@/lib/whatsapp-business";
 import { requireAuth } from "@/middleware/auth";
 
@@ -32,12 +40,24 @@ const consentSchema = z.object({
 });
 
 const integrationSchema = z.object({
-  code: z.string().min(8).optional(),
-  accessToken: z.string().min(20).optional(),
-  wabaId: z.string().min(2).optional(),
-  businessAccountId: z.string().min(2).optional(),
-  phoneNumberId: z.string().min(2),
-  displayPhoneNumber: z.string().min(6).max(32),
+  code: z.string().min(8),
+  signupSession: z
+    .object({
+      event: z.string().optional(),
+      type: z.string().optional(),
+      data: z.record(z.unknown()).optional(),
+    })
+    .passthrough()
+    .optional(),
+});
+
+const replySchema = z.object({
+  body: z.string().trim().min(1).max(4096).optional(),
+  templateName: z.string().trim().min(2).max(80).optional(),
+});
+
+const templateSubmitSchema = z.object({
+  name: z.string().trim().min(2).max(80),
 });
 
 async function getOwnedRestaurant(restaurantId: string, clerkId: string) {
@@ -97,6 +117,27 @@ function getDefaultCampaignBody(input: {
 
 function personalizeBody(body: string, customerName: string) {
   return body.replace(/\{\{\s*name\s*\}\}/gi, customerName);
+}
+
+function renderNumberedTemplateBody(body: string, parameters: string[]) {
+  return parameters.reduce(
+    (nextBody, value, index) =>
+      nextBody.replace(new RegExp(`\\{\\{${index + 1}\\}\\}`, "g"), value),
+    body
+  );
+}
+
+function isWithinCustomerServiceWindow(value: Date | null | undefined) {
+  return Boolean(value && Date.now() - value.getTime() <= 24 * 60 * 60 * 1000);
+}
+
+export function getCampaignDeliveryMode(input: {
+  integrationStatus?: string | null;
+  templateStatus?: string | null;
+}) {
+  return input.integrationStatus === "connected" && input.templateStatus === "approved"
+    ? "meta_cloud_api"
+    : "whatsapp_link";
 }
 
 function buildTemplateLibrary(records: Array<{
@@ -186,6 +227,14 @@ export const crmRoute = new Hono<{
           where: { restaurantId },
           orderBy: [{ lastOrderAt: "desc" }, { createdAt: "desc" }],
           take: 50,
+          include: {
+            consents: {
+              orderBy: {
+                createdAt: "desc",
+              },
+              take: 1,
+            },
+          },
         }),
         prisma.campaign.findMany({
           where: { restaurantId },
@@ -274,7 +323,7 @@ export const crmRoute = new Hono<{
               orderBy: {
                 createdAt: "desc",
               },
-              take: 1,
+              take: 25,
             },
           },
         }),
@@ -319,6 +368,13 @@ export const crmRoute = new Hono<{
           totalSpend: toNumber(customer.totalSpend),
           currency: customer.currency,
           createdAt: customer.createdAt,
+          latestConsent: customer.consents[0]
+            ? {
+                status: customer.consents[0].status,
+                source: customer.consents[0].source,
+                createdAt: customer.consents[0].createdAt,
+              }
+            : null,
         })),
         campaigns: campaigns.map((campaign) => ({
           id: campaign.id,
@@ -360,6 +416,22 @@ export const crmRoute = new Hono<{
                   createdAt: conversation.messages[0].createdAt,
                 }
               : null,
+            messages: conversation.messages
+              .slice()
+              .reverse()
+              .map((message) => ({
+                id: message.id,
+                direction: message.direction,
+                type: message.type,
+                status: message.status,
+                body: message.body,
+                providerMessageId: message.providerMessageId,
+                sentAt: message.sentAt,
+                deliveredAt: message.deliveredAt,
+                readAt: message.readAt,
+                failedAt: message.failedAt,
+                createdAt: message.createdAt,
+              })),
           })),
         },
       });
@@ -373,11 +445,53 @@ export const crmRoute = new Hono<{
       const auth = c.get("auth");
       await getOwnedRestaurant(restaurantId, auth.clerkId);
       const data = integrationSchema.parse(await c.req.json());
-      const accessToken = data.accessToken ?? (data.code ? await exchangeEmbeddedSignupCode(data.code) : null);
+      const sessionAssets = extractEmbeddedSignupCustomerAssets(data.signupSession);
 
-      if (!accessToken) {
-        throw new ApiError("WhatsApp access token or embedded signup code is required.", 400);
+      if (sessionAssets.event === "CANCEL" || sessionAssets.errorCode || sessionAssets.errorMessage) {
+        throw new ApiError(
+          sessionAssets.errorMessage ??
+            `Meta signup was not completed${sessionAssets.currentStep ? ` at ${sessionAssets.currentStep}` : ""}.`,
+          400
+        );
       }
+
+      if (!sessionAssets.wabaId || !sessionAssets.phoneNumberId) {
+        throw new ApiError("Meta signup did not return a WhatsApp Business Account and phone number.", 400);
+      }
+
+      const accessToken = await exchangeEmbeddedSignupCode(data.code);
+      const [phoneNumber, accountPhoneNumbers] = await Promise.all([
+        fetchWhatsAppPhoneNumber({
+          accessToken,
+          phoneNumberId: sessionAssets.phoneNumberId,
+        }),
+        fetchWhatsAppAccountPhoneNumbers({
+          accessToken,
+          wabaId: sessionAssets.wabaId,
+        }),
+      ]);
+      const verifiedPhone = accountPhoneNumbers.data?.find(
+        (entry) => entry.id === sessionAssets.phoneNumberId
+      );
+
+      if (!verifiedPhone) {
+        throw new ApiError("The selected phone number was not found on the selected WhatsApp Business Account.", 400);
+      }
+
+      await subscribeWhatsAppBusinessAccount({
+        accessToken,
+        wabaId: sessionAssets.wabaId,
+      });
+      await registerWhatsAppPhoneNumber({
+        accessToken,
+        phoneNumberId: sessionAssets.phoneNumberId,
+      });
+
+      const displayPhoneNumber =
+        phoneNumber.display_phone_number ??
+        verifiedPhone.display_phone_number ??
+        sessionAssets.displayPhoneNumber ??
+        "";
 
       const integration = await prisma.whatsAppIntegration.upsert({
         where: {
@@ -386,10 +500,10 @@ export const crmRoute = new Hono<{
         create: {
           restaurantId,
           status: "connected",
-          wabaId: data.wabaId ?? null,
-          businessAccountId: data.businessAccountId ?? null,
-          phoneNumberId: data.phoneNumberId,
-          displayPhoneNumber: normalizeWhatsAppPhone(data.displayPhoneNumber),
+          wabaId: sessionAssets.wabaId,
+          businessAccountId: sessionAssets.businessAccountId ?? null,
+          phoneNumberId: sessionAssets.phoneNumberId,
+          displayPhoneNumber: normalizeWhatsAppPhone(displayPhoneNumber),
           accessTokenCipher: encryptAccessToken(accessToken),
           tokenLastFour: getTokenLastFour(accessToken),
           connectedAt: new Date(),
@@ -397,10 +511,10 @@ export const crmRoute = new Hono<{
         },
         update: {
           status: "connected",
-          wabaId: data.wabaId ?? undefined,
-          businessAccountId: data.businessAccountId ?? undefined,
-          phoneNumberId: data.phoneNumberId,
-          displayPhoneNumber: normalizeWhatsAppPhone(data.displayPhoneNumber),
+          wabaId: sessionAssets.wabaId,
+          businessAccountId: sessionAssets.businessAccountId ?? undefined,
+          phoneNumberId: sessionAssets.phoneNumberId,
+          displayPhoneNumber: normalizeWhatsAppPhone(displayPhoneNumber),
           accessTokenCipher: encryptAccessToken(accessToken),
           tokenLastFour: getTokenLastFour(accessToken),
           connectedAt: new Date(),
@@ -547,6 +661,294 @@ export const crmRoute = new Hono<{
       return errorResponse(c, error);
     }
   })
+  .post("/:restaurantId/whatsapp-templates/submit", requireAuth, async (c) => {
+    try {
+      const restaurantId = c.req.param("restaurantId");
+      const auth = c.get("auth");
+      await getOwnedRestaurant(restaurantId, auth.clerkId);
+      const data = templateSubmitSchema.parse(await c.req.json());
+      const template = WHATSAPP_TEMPLATE_LIBRARY.find((entry) => entry.name === data.name);
+
+      if (!template) {
+        throw new ApiError("Template not found", 404);
+      }
+
+      const integration = await prisma.whatsAppIntegration.findFirst({
+        where: {
+          restaurantId,
+          status: "connected",
+        },
+      });
+
+      if (!integration?.wabaId) {
+        throw new ApiError("Connect a WhatsApp Business account before submitting templates.", 400);
+      }
+
+      const accessToken = decryptAccessToken(integration.accessTokenCipher);
+      const response = await createWhatsAppTemplate({
+        accessToken,
+        wabaId: integration.wabaId,
+        name: template.name,
+        category: template.category,
+        language: template.language,
+        body: template.body,
+      });
+      const submittedAt = new Date();
+      const record = await prisma.whatsAppTemplate.upsert({
+        where: {
+          restaurantId_name_language: {
+            restaurantId,
+            name: template.name,
+            language: template.language,
+          },
+        },
+        create: {
+          restaurantId,
+          integrationId: integration.id,
+          name: template.name,
+          label: template.label,
+          category: response.category ?? template.category,
+          language: template.language,
+          status: mapTemplateStatus(response.status) === "draft" ? "pending" : mapTemplateStatus(response.status),
+          body: template.body,
+          variables: template.variables,
+          metaTemplateId: response.id ?? null,
+          lastSyncedAt: submittedAt,
+        },
+        update: {
+          integrationId: integration.id,
+          category: response.category ?? template.category,
+          status: mapTemplateStatus(response.status) === "draft" ? "pending" : mapTemplateStatus(response.status),
+          body: template.body,
+          variables: template.variables,
+          metaTemplateId: response.id ?? undefined,
+          rejectionReason: null,
+          lastSyncedAt: submittedAt,
+        },
+      });
+
+      return c.json({ template: record }, 201);
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  })
+  .post("/:restaurantId/conversations/:conversationId/messages", requireAuth, async (c) => {
+    try {
+      const restaurantId = c.req.param("restaurantId");
+      const conversationId = c.req.param("conversationId");
+      const auth = c.get("auth");
+      const restaurant = await getOwnedRestaurant(restaurantId, auth.clerkId);
+      const data = replySchema.parse(await c.req.json());
+
+      if (!data.body && !data.templateName) {
+        throw new ApiError("Reply body or template is required.", 400);
+      }
+
+      const [integration, conversation] = await Promise.all([
+        prisma.whatsAppIntegration.findFirst({
+          where: {
+            restaurantId,
+            status: "connected",
+          },
+        }),
+        prisma.whatsAppConversation.findFirst({
+          where: {
+            id: conversationId,
+            restaurantId,
+          },
+          include: {
+            customer: true,
+            messages: {
+              where: {
+                direction: "inbound",
+              },
+              orderBy: {
+                createdAt: "desc",
+              },
+              take: 1,
+            },
+          },
+        }),
+      ]);
+
+      if (!integration) {
+        throw new ApiError("Connect a WhatsApp Business account before replying.", 400);
+      }
+
+      if (!conversation) {
+        throw new ApiError("Conversation not found", 404);
+      }
+
+      const accessToken = decryptAccessToken(integration.accessTokenCipher);
+      const customerName =
+        conversation.customerName ??
+        conversation.customer?.displayName ??
+        conversation.customerPhone;
+      let providerMessageId: string;
+      let body: string;
+      let type: "text" | "template";
+      let templateName: string | null = null;
+
+      if (data.templateName) {
+        const templateRecord = await prisma.whatsAppTemplate.findUnique({
+          where: {
+            restaurantId_name_language: {
+              restaurantId,
+              name: data.templateName,
+              language: "en",
+            },
+          },
+        });
+
+        if (!templateRecord || templateRecord.status !== "approved") {
+          throw new ApiError("Select an approved WhatsApp template before sending this reply.", 400);
+        }
+
+        const parameters = buildTemplateParameters({
+          templateName: data.templateName,
+          customerName,
+          restaurantName: restaurant.name,
+        });
+        providerMessageId = await sendWhatsAppTemplate({
+          accessToken,
+          phoneNumberId: integration.phoneNumberId,
+          to: conversation.customerPhone,
+          templateName: data.templateName,
+          language: "en",
+          parameters,
+        });
+        body = renderNumberedTemplateBody(templateRecord.body, parameters);
+        type = "template";
+        templateName = data.templateName;
+      } else {
+        const lastInboundAt = conversation.messages[0]?.createdAt ?? null;
+        if (!isWithinCustomerServiceWindow(lastInboundAt)) {
+          throw new ApiError("Use an approved template to reply outside the 24-hour customer service window.", 400);
+        }
+
+        body = data.body as string;
+        providerMessageId = await sendWhatsAppText({
+          accessToken,
+          phoneNumberId: integration.phoneNumberId,
+          to: conversation.customerPhone,
+          body,
+        });
+        type = "text";
+      }
+
+      const sentAt = new Date();
+      const message = await prisma.$transaction(async (tx) => {
+        const messageLog = await tx.messageLog.create({
+          data: {
+            restaurantId,
+            customerId: conversation.customerId,
+            direction: "outbound",
+            status: "sent",
+            body,
+            templateName,
+            providerMessageId,
+            sentAt,
+          },
+          select: {
+            id: true,
+          },
+        });
+
+        const created = await tx.whatsAppMessage.create({
+          data: {
+            restaurantId,
+            integrationId: integration.id,
+            conversationId: conversation.id,
+            customerId: conversation.customerId,
+            messageLogId: messageLog.id,
+            providerMessageId,
+            direction: "outbound",
+            type,
+            status: "sent",
+            fromPhone: integration.displayPhoneNumber,
+            toPhone: conversation.customerPhone,
+            body,
+            sentAt,
+          },
+        });
+
+        await tx.whatsAppConversation.update({
+          where: {
+            id: conversation.id,
+          },
+          data: {
+            lastMessageAt: sentAt,
+          },
+        });
+
+        return created;
+      });
+
+      return c.json({ message }, 201);
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  })
+  .patch("/:restaurantId/conversations/:conversationId/read", requireAuth, async (c) => {
+    try {
+      const restaurantId = c.req.param("restaurantId");
+      const conversationId = c.req.param("conversationId");
+      const auth = c.get("auth");
+      await getOwnedRestaurant(restaurantId, auth.clerkId);
+
+      const conversation = await prisma.whatsAppConversation.findFirst({
+        where: {
+          id: conversationId,
+          restaurantId,
+        },
+        include: {
+          integration: true,
+          messages: {
+            where: {
+              direction: "inbound",
+              providerMessageId: {
+                not: null,
+              },
+            },
+            orderBy: {
+              createdAt: "desc",
+            },
+            take: 1,
+          },
+        },
+      });
+
+      if (!conversation) {
+        throw new ApiError("Conversation not found", 404);
+      }
+
+      const latestInbound = conversation.messages[0];
+      if (conversation.integration && latestInbound?.providerMessageId) {
+        await markWhatsAppMessageRead({
+          accessToken: decryptAccessToken(conversation.integration.accessTokenCipher),
+          phoneNumberId: conversation.integration.phoneNumberId,
+          messageId: latestInbound.providerMessageId,
+        }).catch(() => null);
+      }
+
+      const updated = await prisma.whatsAppConversation.update({
+        where: {
+          id: conversation.id,
+        },
+        data: {
+          unreadCount: 0,
+        },
+        select: {
+          id: true,
+          unreadCount: true,
+        },
+      });
+
+      return c.json({ conversation: updated });
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  })
   .post("/:restaurantId/campaigns", requireAuth, async (c) => {
     try {
       const restaurantId = c.req.param("restaurantId");
@@ -589,7 +991,11 @@ export const crmRoute = new Hono<{
           },
         }),
       ]);
-      const canSendViaApi = Boolean(integration && templateRecord?.status === "approved");
+      const deliveryMode = getCampaignDeliveryMode({
+        integrationStatus: integration?.status,
+        templateStatus: templateRecord?.status,
+      });
+      const canSendViaApi = deliveryMode === "meta_cloud_api";
       const inactiveCutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
       const customerWhere =
         data.type === "inactive_30"
@@ -610,13 +1016,12 @@ export const crmRoute = new Hono<{
         orderBy: [{ lastOrderAt: "asc" }, { createdAt: "asc" }],
         take: 100,
       });
-      const body =
-        data.body ??
-        getDefaultCampaignBody({
-          type: data.type,
-          restaurantName: restaurant.name,
-          promotionTitle: promotion?.title,
-        });
+      const fallbackBody = getDefaultCampaignBody({
+        type: data.type,
+        restaurantName: restaurant.name,
+        promotionTitle: promotion?.title,
+      });
+      const body = canSendViaApi && templateRecord ? templateRecord.body : data.body ?? fallbackBody;
       const campaignName =
         data.name ??
         (data.type === "inactive_30"
@@ -655,9 +1060,12 @@ export const crmRoute = new Hono<{
           restaurantName: restaurant.name,
           promotionTitle: promotion?.title,
         });
-        const personalizedBody = data.body
-          ? personalizeBody(data.body, customer.displayName)
-          : renderTemplatePreview(templateName, parameters);
+        const personalizedBody =
+          canSendViaApi && templateRecord
+            ? renderNumberedTemplateBody(templateRecord.body, parameters)
+            : data.body
+              ? personalizeBody(data.body, customer.displayName)
+              : renderTemplatePreview(templateName, parameters);
 
         if (!canSendViaApi || !integration || !accessToken) {
           await prisma.messageLog.create({
@@ -783,7 +1191,7 @@ export const crmRoute = new Hono<{
         targeted: customers.length,
         sent: canSendViaApi ? loggedCount : 0,
         failed: failedCount,
-        mode: canSendViaApi ? "meta_cloud_api" : "whatsapp_link",
+        mode: deliveryMode,
       }, 201);
     } catch (error) {
       return errorResponse(c, error);

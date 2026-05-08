@@ -33,6 +33,18 @@ function firstError(status: Record<string, any>) {
   };
 }
 
+export function getWhatsAppConsentCommand(body: string | null | undefined) {
+  const normalized = body?.trim().toLowerCase();
+  if (!normalized) return null;
+  if (["stop", "unsubscribe", "opt out", "opt-out", "cancel"].includes(normalized)) {
+    return "opt_out";
+  }
+  if (["start", "subscribe", "opt in", "opt-in", "yes"].includes(normalized)) {
+    return "opt_in";
+  }
+  return null;
+}
+
 async function handleInboundMessage(input: {
   integration: {
     id: string;
@@ -50,6 +62,7 @@ async function handleInboundMessage(input: {
   const body = extractWebhookMessageBody(input.message);
   const occurredAt = toWebhookDate(input.message.timestamp);
   const displayName = input.contactName ?? fromPhone;
+  const consentCommand = getWhatsAppConsentCommand(body);
 
   await prisma.$transaction(async (tx) => {
     const customer = await tx.customer.upsert({
@@ -73,6 +86,28 @@ async function handleInboundMessage(input: {
         id: true,
       },
     });
+
+    if (consentCommand) {
+      await tx.customer.update({
+        where: {
+          id: customer.id,
+        },
+        data: {
+          marketingOptIn: consentCommand === "opt_in",
+          marketingOptInAt: consentCommand === "opt_in" ? occurredAt : undefined,
+          marketingOptOutAt: consentCommand === "opt_out" ? occurredAt : null,
+        },
+      });
+
+      await tx.customerConsent.create({
+        data: {
+          restaurantId: input.integration.restaurantId,
+          customerId: customer.id,
+          status: consentCommand,
+          source: "whatsapp_keyword",
+        },
+      });
+    }
 
     const conversation = await tx.whatsAppConversation.upsert({
       where: {

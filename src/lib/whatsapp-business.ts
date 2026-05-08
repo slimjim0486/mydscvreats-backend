@@ -54,6 +54,81 @@ export const WHATSAPP_TEMPLATE_LIBRARY = [
 
 type TemplateName = (typeof WHATSAPP_TEMPLATE_LIBRARY)[number]["name"];
 
+export type EmbeddedSignupSessionPayload = {
+  event?: string;
+  type?: string;
+  data?: Record<string, unknown>;
+  [key: string]: unknown;
+};
+
+function readString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function readFirstString(...values: unknown[]) {
+  for (const value of values) {
+    const next = readString(value);
+    if (next) return next;
+  }
+
+  return null;
+}
+
+function isIgnorableOnboardingError(error: unknown) {
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  return (
+    message.includes("already subscribed") ||
+    message.includes("already registered") ||
+    message.includes("already exists") ||
+    message.includes("duplicate")
+  );
+}
+
+export function extractEmbeddedSignupCustomerAssets(session: EmbeddedSignupSessionPayload | null | undefined) {
+  const data = session?.data ?? {};
+  const nestedPhone = typeof data.phone_number === "object" && data.phone_number
+    ? (data.phone_number as Record<string, unknown>)
+    : {};
+  const nestedWaba = typeof data.waba === "object" && data.waba
+    ? (data.waba as Record<string, unknown>)
+    : {};
+  const event = readString(session?.event);
+
+  return {
+    event,
+    wabaId: readFirstString(
+      data.waba_id,
+      data.wabaId,
+      data.whatsapp_business_account_id,
+      data.whatsappBusinessAccountId,
+      nestedWaba.id
+    ),
+    phoneNumberId: readFirstString(
+      data.phone_number_id,
+      data.phoneNumberId,
+      data.business_phone_number_id,
+      data.businessPhoneNumberId,
+      nestedPhone.id
+    ),
+    businessAccountId: readFirstString(
+      data.business_id,
+      data.businessId,
+      data.business_account_id,
+      data.businessAccountId
+    ),
+    displayPhoneNumber: readFirstString(
+      data.display_phone_number,
+      data.displayPhoneNumber,
+      nestedPhone.display_phone_number,
+      nestedPhone.displayPhoneNumber
+    ),
+    errorCode: readFirstString(data.error_code, data.errorCode),
+    errorMessage: readFirstString(data.error_message, data.errorMessage),
+    currentStep: readFirstString(data.current_step, data.currentStep),
+    sessionId: readFirstString(data.session_id, data.sessionId),
+  };
+}
+
 function getEncryptionKey() {
   if (!env.WHATSAPP_TOKEN_ENCRYPTION_KEY) {
     throw new ApiError(
@@ -177,6 +252,80 @@ export async function exchangeEmbeddedSignupCode(code: string) {
   return payload.access_token as string;
 }
 
+export async function fetchWhatsAppPhoneNumber(input: {
+  accessToken: string;
+  phoneNumberId: string;
+}) {
+  return graphRequest<{
+    id: string;
+    display_phone_number?: string;
+    verified_name?: string;
+    quality_rating?: string;
+    code_verification_status?: string;
+  }>(
+    `/${input.phoneNumberId}?fields=id,display_phone_number,verified_name,quality_rating,code_verification_status`,
+    input.accessToken
+  );
+}
+
+export async function fetchWhatsAppAccountPhoneNumbers(input: {
+  accessToken: string;
+  wabaId: string;
+}) {
+  return graphRequest<{
+    data?: Array<{
+      id: string;
+      display_phone_number?: string;
+      verified_name?: string;
+    }>;
+  }>(
+    `/${input.wabaId}/phone_numbers?fields=id,display_phone_number,verified_name&limit=100`,
+    input.accessToken
+  );
+}
+
+export async function subscribeWhatsAppBusinessAccount(input: {
+  accessToken: string;
+  wabaId: string;
+}) {
+  try {
+    return await graphRequest<{ success?: boolean }>(
+      `/${input.wabaId}/subscribed_apps`,
+      input.accessToken,
+      {
+        method: "POST",
+        body: JSON.stringify({}),
+      }
+    );
+  } catch (error) {
+    if (isIgnorableOnboardingError(error)) {
+      return { success: true };
+    }
+    throw error;
+  }
+}
+
+export async function registerWhatsAppPhoneNumber(input: {
+  accessToken: string;
+  phoneNumberId: string;
+}) {
+  try {
+    return await graphRequest<{ success?: boolean }>(
+      `/${input.phoneNumberId}/register`,
+      input.accessToken,
+      {
+        method: "POST",
+        body: JSON.stringify({ messaging_product: "whatsapp" }),
+      }
+    );
+  } catch (error) {
+    if (isIgnorableOnboardingError(error)) {
+      return { success: true };
+    }
+    throw error;
+  }
+}
+
 export function buildTemplateParameters(input: {
   templateName: string;
   customerName: string;
@@ -249,6 +398,79 @@ export async function sendWhatsAppTemplate(input: {
   }
 
   return messageId;
+}
+
+export async function sendWhatsAppText(input: {
+  accessToken: string;
+  phoneNumberId: string;
+  to: string;
+  body: string;
+}) {
+  const response = await graphRequest<{
+    messages?: Array<{ id: string; message_status?: string }>;
+  }>(`/${input.phoneNumberId}/messages`, input.accessToken, {
+    method: "POST",
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: input.to.replace(/\D/g, ""),
+      type: "text",
+      text: {
+        preview_url: false,
+        body: input.body,
+      },
+    }),
+  });
+
+  const messageId = response.messages?.[0]?.id;
+  if (!messageId) {
+    throw new ApiError("Meta did not return a WhatsApp message id.", 502);
+  }
+
+  return messageId;
+}
+
+export async function markWhatsAppMessageRead(input: {
+  accessToken: string;
+  phoneNumberId: string;
+  messageId: string;
+}) {
+  return graphRequest<{ success?: boolean }>(`/${input.phoneNumberId}/messages`, input.accessToken, {
+    method: "POST",
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+      status: "read",
+      message_id: input.messageId,
+    }),
+  });
+}
+
+export async function createWhatsAppTemplate(input: {
+  accessToken: string;
+  wabaId: string;
+  name: string;
+  category: string;
+  language: string;
+  body: string;
+}) {
+  return graphRequest<{ id?: string; status?: string; category?: string }>(
+    `/${input.wabaId}/message_templates`,
+    input.accessToken,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        name: input.name,
+        category: input.category,
+        language: input.language,
+        components: [
+          {
+            type: "BODY",
+            text: input.body,
+          },
+        ],
+      }),
+    }
+  );
 }
 
 export async function fetchWhatsAppTemplates(input: {
