@@ -1,5 +1,6 @@
 import { runActor } from "@/lib/apify";
 import { env } from "@/lib/env";
+import { ApiError } from "@/lib/errors";
 import type { GbpData, RestaurantSeoContext, ReviewData } from "./types";
 
 function firstString(source: Record<string, unknown>, keys: string[]) {
@@ -42,6 +43,36 @@ function normalizeCategories(item: Record<string, unknown>) {
   return [];
 }
 
+function normalize(value: string | null | undefined) {
+  return (value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function looseMatch(a: string | null | undefined, b: string | null | undefined) {
+  const left = normalize(a);
+  const right = normalize(b);
+  if (!left || !right) return false;
+  return left === right || left.includes(right) || right.includes(left);
+}
+
+function buildSearchStrings(restaurant: RestaurantSeoContext) {
+  return Array.from(
+    new Set(
+      [
+        [restaurant.name, restaurant.address].filter(Boolean).join(" "),
+        [restaurant.name, restaurant.location].filter(Boolean).join(" "),
+        [restaurant.name, restaurant.cuisineType, restaurant.location].filter(Boolean).join(" "),
+        restaurant.name,
+      ]
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+    )
+  );
+}
+
 function normalizeReview(item: Record<string, unknown>) {
   return {
     text: firstString(item, ["text", "reviewText", "review", "content"]) ?? "",
@@ -53,12 +84,12 @@ function normalizeReview(item: Record<string, unknown>) {
 
 function buildMapsInput(restaurant: RestaurantSeoContext) {
   const placeId = restaurant.gbpConnection?.placeId;
-  const search = [restaurant.name, restaurant.address ?? restaurant.location].filter(Boolean).join(" ");
+  const searchStringsArray = buildSearchStrings(restaurant);
 
   return {
     placeIds: placeId ? [placeId] : undefined,
-    searchStringsArray: placeId ? undefined : [search],
-    maxCrawledPlacesPerSearch: 1,
+    searchStringsArray: placeId ? undefined : searchStringsArray,
+    maxCrawledPlacesPerSearch: placeId ? 1 : 3,
     language: "en",
     maxImages: 30,
     includeOpeningHours: true,
@@ -67,24 +98,55 @@ function buildMapsInput(restaurant: RestaurantSeoContext) {
 
 function buildReviewsInput(restaurant: RestaurantSeoContext) {
   const placeId = restaurant.gbpConnection?.placeId;
-  const search = [restaurant.name, restaurant.address ?? restaurant.location].filter(Boolean).join(" ");
+  const searchStringsArray = buildSearchStrings(restaurant);
 
   return {
     placeIds: placeId ? [placeId] : undefined,
-    searchStringsArray: placeId ? undefined : [search],
+    searchStringsArray: placeId ? undefined : searchStringsArray,
     maxReviews: 100,
     language: "en",
     reviewsSort: "newest",
   };
 }
 
+function scoreMapsCandidate(item: Record<string, unknown>, restaurant: RestaurantSeoContext) {
+  let score = 0;
+  const itemPlaceId = firstString(item, ["placeId", "place_id", "googlePlaceId"]);
+  const itemName = firstString(item, ["title", "name", "placeName"]);
+  const itemAddress = firstString(item, ["address", "street", "fullAddress"]);
+  const itemPhone = firstString(item, ["phone", "phoneNumber", "claimThisBusinessPhone"]);
+  const itemWebsite = firstString(item, ["website", "url", "websiteUrl"]);
+
+  if (restaurant.gbpConnection?.placeId && itemPlaceId === restaurant.gbpConnection.placeId) score += 100;
+  if (looseMatch(itemName, restaurant.name)) score += 40;
+  if (looseMatch(itemAddress, restaurant.address ?? restaurant.location)) score += 25;
+  if (restaurant.phone && itemPhone && itemPhone.replace(/\D/g, "").endsWith(restaurant.phone.replace(/\D/g, "").slice(-7))) score += 15;
+  if (restaurant.website && itemWebsite && looseMatch(itemWebsite, restaurant.website)) score += 10;
+  if (itemName) score += 5;
+
+  return score;
+}
+
+function pickMapsItem(items: Record<string, unknown>[], restaurant: RestaurantSeoContext) {
+  return [...items]
+    .sort((a, b) => scoreMapsCandidate(b, restaurant) - scoreMapsCandidate(a, restaurant))[0] ?? null;
+}
+
 export async function collectGoogleMapsData(restaurant: RestaurantSeoContext) {
+  const input = buildMapsInput(restaurant);
+  console.info("Google Maps SEO lookup input", {
+    restaurantId: restaurant.id,
+    hasPlaceId: Boolean(restaurant.gbpConnection?.placeId),
+    searchStringsArray: input.searchStringsArray,
+    maxCrawledPlacesPerSearch: input.maxCrawledPlacesPerSearch,
+  });
+
   const result = await runActor<Record<string, unknown>>(
     env.APIFY_ACTOR_GMAPS,
-    buildMapsInput(restaurant),
+    input,
     { timeoutMs: 120_000 }
   );
-  const item = result.items[0] ?? {};
+  const item = pickMapsItem(result.items, restaurant) ?? {};
   const imageUrls = item.imageUrls ?? item.images ?? item.photos;
 
   const data: GbpData = {
@@ -107,6 +169,13 @@ export async function collectGoogleMapsData(restaurant: RestaurantSeoContext) {
     longitude: firstNumber(item, ["lng", "longitude"]) ?? nestedNumber(item, "location", "lng"),
     popularTimes: item.popularTimes ?? null,
   };
+
+  if (!data.name && !data.address && !data.phone && !data.website) {
+    throw new ApiError(
+      `Google Maps actor returned ${result.items.length} item(s), but no usable listing matched "${restaurant.name}".`,
+      502
+    );
+  }
 
   return {
     data,
