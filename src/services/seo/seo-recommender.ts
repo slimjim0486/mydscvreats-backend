@@ -20,6 +20,8 @@ const ACTION_TARGETS = [
   "open_website",
 ] as const;
 
+const MAX_RECOMMENDATIONS = 8;
+
 const recommendationSchema = z.object({
   pillar: z.enum(["gbp", "onPage", "rankGrid", "citations", "reviews"]),
   severity: z.enum(["critical", "high", "medium", "low"]),
@@ -31,7 +33,7 @@ const recommendationSchema = z.object({
   actionTarget: z.enum(ACTION_TARGETS).nullable().optional(),
 });
 
-const recommendationsSchema = z.array(recommendationSchema).min(1).max(8);
+const recommendationsSchema = z.array(recommendationSchema).min(1);
 
 interface ResolvedAction {
   label: string;
@@ -166,6 +168,7 @@ export async function recommendSeoActions(input: {
     max_tokens: 3500,
     system: `You are a MENA restaurant local SEO strategist. Return only valid JSON.
 Create prioritized, concrete actions for restaurant owners based on local discovery signals from Google Maps, delivery apps, website SEO, local rank grid, and reviews.
+Return between 1 and ${MAX_RECOMMENDATIONS} recommendations.
 Use this exact JSON array shape:
 [
   {
@@ -220,7 +223,19 @@ Keep actions grounded in the provided data. Do not invent exact rankings, review
     .filter((entry) => entry.type === "text")
     .map((entry) => entry.text)
     .join("\n");
-  const parsed = recommendationsSchema.parse(parseJsonArray(text));
+  let parsed: z.infer<typeof recommendationsSchema>;
+  try {
+    parsed = recommendationsSchema
+      .parse(parseJsonArray(text))
+      .slice(0, MAX_RECOMMENDATIONS);
+  } catch (error) {
+    console.warn("Failed to parse SEO recommendations; using fallback", error);
+    return {
+      recommendations: fallbackRecommendations(input.scorecard, input.restaurant),
+      tokensIn: response.usage.input_tokens,
+      tokensOut: response.usage.output_tokens,
+    };
+  }
 
   return {
     recommendations: parsed.map((recommendation) =>
