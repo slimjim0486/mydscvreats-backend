@@ -103,7 +103,7 @@ function buildReviewsInput(restaurant: RestaurantSeoContext) {
   return {
     placeIds: placeId ? [placeId] : undefined,
     searchStringsArray: placeId ? undefined : searchStringsArray,
-    maxReviews: 100,
+    maxReviews: 50,
     language: "en",
     reviewsSort: "newest",
   };
@@ -187,7 +187,7 @@ export async function collectGoogleReviewsData(restaurant: RestaurantSeoContext)
   const result = await runActor<Record<string, unknown>>(
     env.APIFY_ACTOR_GMAPS_REVIEWS,
     buildReviewsInput(restaurant),
-    { timeoutMs: 120_000 }
+    { timeoutMs: 300_000 }
   );
   const reviews = result.items
     .map(normalizeReview)

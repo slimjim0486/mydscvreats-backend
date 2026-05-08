@@ -2,7 +2,7 @@ import { runActor } from "@/lib/apify";
 import { env } from "@/lib/env";
 import type { GbpData, RankGridData, RankGridKeywordResult, RestaurantSeoContext } from "./types";
 
-const GRID_SIZE = 5;
+const GRID_SIZE = 3;
 const GRID_SPACING_METERS = 500;
 const EARTH_LAT_METERS = 111_320;
 
@@ -38,7 +38,7 @@ function buildKeywords(restaurant: RestaurantSeoContext) {
       `restaurants in ${neighborhood}`,
       `best restaurants ${city}`,
     ])
-  ).slice(0, 6);
+  ).slice(0, 4);
 }
 
 function buildGrid(lat: number | null, lng: number | null) {
@@ -112,7 +112,7 @@ export async function collectRankGridData(
       languageCode: "en",
       countryCode: "ae",
     },
-    { timeoutMs: 150_000, estimateCostUsd: 0.12 }
+    { timeoutMs: 300_000, estimateCostUsd: 0.12 }
   );
 
   const resultsByQuery = new Map<string, Record<string, unknown>[]>();
