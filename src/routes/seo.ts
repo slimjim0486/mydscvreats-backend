@@ -15,6 +15,7 @@ import type { RestaurantSeoContext } from "@/services/seo/types";
 
 const createAnalysisSchema = z.object({
   restaurantId: z.string().min(1),
+  forceRefresh: z.boolean().optional().default(false),
 });
 
 async function getOwnedRestaurant(restaurantId: string, clerkId: string) {
@@ -98,25 +99,27 @@ export const seoRoute = new Hono<{
       }
 
       const inputsHash = computeSeoInputsHash(restaurant as RestaurantSeoContext);
-      const cached = await prisma.seoAnalysis.findFirst({
-        where: {
-          restaurantId: restaurant.id,
-          inputsHash,
-          status: "succeeded",
-          createdAt: {
-            gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+      if (!data.forceRefresh) {
+        const cached = await prisma.seoAnalysis.findFirst({
+          where: {
+            restaurantId: restaurant.id,
+            inputsHash,
+            status: "succeeded",
+            createdAt: {
+              gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+            },
           },
-        },
-        orderBy: { createdAt: "desc" },
-      });
-
-      if (cached) {
-        return c.json({
-          analysisId: cached.id,
-          status: cached.status,
-          cached: true,
-          analysis: await serializeAnalysisWithContext(cached),
+          orderBy: { createdAt: "desc" },
         });
+
+        if (cached) {
+          return c.json({
+            analysisId: cached.id,
+            status: cached.status,
+            cached: true,
+            analysis: await serializeAnalysisWithContext(cached),
+          });
+        }
       }
 
       const analysis = await prisma.seoAnalysis.create({
