@@ -87,11 +87,62 @@ enum CampaignType {
 enum CampaignStatus {
   draft
   logged
+  sending
+  sent
+  failed
 }
 
 enum MessageLogStatus {
   logged
   skipped_opt_out
+  queued
+  sent
+  delivered
+  read
+  failed
+}
+
+enum WhatsAppIntegrationStatus {
+  pending
+  connected
+  needs_review
+  failed
+  disconnected
+}
+
+enum WhatsAppTemplateStatus {
+  draft
+  pending
+  approved
+  rejected
+  paused
+  disabled
+}
+
+enum WhatsAppMessageDirection {
+  inbound
+  outbound
+}
+
+enum WhatsAppMessageType {
+  text
+  image
+  audio
+  video
+  document
+  button
+  interactive
+  template
+  unknown
+}
+
+enum WhatsAppMessageStatus {
+  received
+  queued
+  sent
+  delivered
+  read
+  failed
 }
 
 model User {
@@ -153,6 +204,11 @@ model Restaurant {
   orderIntents              OrderIntent[]
   campaigns                 Campaign[]
   messageLogs               MessageLog[]
+  whatsappIntegration       WhatsAppIntegration?
+  whatsappTemplates         WhatsAppTemplate[]
+  whatsappConversations     WhatsAppConversation[]
+  whatsappMessages          WhatsAppMessage[]
+  whatsappStatusEvents      WhatsAppMessageStatusEvent[]
   menuItemLikes             MenuItemLike[]
   menuSourceImageCandidates MenuSourceImageCandidate[]
   slugAliases               RestaurantSlugAlias[]
@@ -494,6 +550,8 @@ model Customer {
   consents   CustomerConsent[]
   orders     OrderIntent[]
   messages   MessageLog[]
+  whatsappConversations WhatsAppConversation[]
+  whatsappMessages      WhatsAppMessage[]
 
   @@unique([restaurantId, normalizedPhone])
   @@index([restaurantId, marketingOptIn])
@@ -599,16 +657,163 @@ model MessageLog {
   status       MessageLogStatus @default(logged)
   body         String
   whatsappUrl  String?          @map("whatsapp_url")
+  templateName String?          @map("template_name")
+  providerMessageId String?     @unique @map("provider_message_id")
+  errorCode    String?          @map("error_code")
+  errorMessage String?          @map("error_message")
+  sentAt       DateTime?        @map("sent_at")
+  deliveredAt  DateTime?        @map("delivered_at")
+  readAt       DateTime?        @map("read_at")
+  failedAt     DateTime?        @map("failed_at")
   createdAt    DateTime         @default(now()) @map("created_at")
 
   restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   customer   Customer?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
   campaign   Campaign?  @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  whatsappMessage WhatsAppMessage?
 
   @@index([restaurantId, createdAt])
   @@index([customerId, createdAt])
   @@index([campaignId])
   @@map("message_logs")
+}
+
+model WhatsAppIntegration {
+  id                 String                    @id @default(cuid())
+  restaurantId       String                    @unique @map("restaurant_id")
+  status             WhatsAppIntegrationStatus @default(pending)
+  wabaId             String?                   @map("waba_id")
+  businessAccountId  String?                   @map("business_account_id")
+  phoneNumberId      String                    @unique @map("phone_number_id")
+  displayPhoneNumber String                    @map("display_phone_number")
+  accessTokenCipher  String                    @map("access_token_cipher") @db.Text
+  tokenLastFour      String?                   @map("token_last_four")
+  connectedAt        DateTime?                 @map("connected_at")
+  lastWebhookAt      DateTime?                 @map("last_webhook_at")
+  lastTemplateSyncAt DateTime?                 @map("last_template_sync_at")
+  lastError          String?                   @map("last_error") @db.Text
+  createdAt          DateTime                  @default(now()) @map("created_at")
+  updatedAt          DateTime                  @updatedAt @map("updated_at")
+
+  restaurant    Restaurant                  @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  templates     WhatsAppTemplate[]
+  conversations WhatsAppConversation[]
+  messages      WhatsAppMessage[]
+  statusEvents  WhatsAppMessageStatusEvent[]
+
+  @@index([restaurantId, status])
+  @@index([phoneNumberId])
+  @@map("whatsapp_integrations")
+}
+
+model WhatsAppTemplate {
+  id            String                @id @default(cuid())
+  restaurantId  String                @map("restaurant_id")
+  integrationId String?               @map("integration_id")
+  name          String
+  label         String
+  category      String
+  language      String                @default("en")
+  status        WhatsAppTemplateStatus @default(draft)
+  body          String                @db.Text
+  variables     Json?
+  metaTemplateId String?              @map("meta_template_id")
+  rejectionReason String?             @map("rejection_reason") @db.Text
+  lastSyncedAt  DateTime?             @map("last_synced_at")
+  createdAt     DateTime              @default(now()) @map("created_at")
+  updatedAt     DateTime              @updatedAt @map("updated_at")
+
+  restaurant  Restaurant           @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  integration WhatsAppIntegration? @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+
+  @@unique([restaurantId, name, language])
+  @@index([restaurantId, status])
+  @@index([integrationId])
+  @@map("whatsapp_templates")
+}
+
+model WhatsAppConversation {
+  id            String   @id @default(cuid())
+  restaurantId  String   @map("restaurant_id")
+  integrationId String?  @map("integration_id")
+  customerId    String?  @map("customer_id")
+  customerPhone String   @map("customer_phone")
+  customerName  String?  @map("customer_name")
+  lastMessageAt DateTime @default(now()) @map("last_message_at")
+  unreadCount   Int      @default(0) @map("unread_count")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  restaurant  Restaurant           @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  integration WhatsAppIntegration? @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+  customer    Customer?            @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  messages    WhatsAppMessage[]
+
+  @@unique([restaurantId, customerPhone])
+  @@index([restaurantId, lastMessageAt])
+  @@index([customerId, lastMessageAt])
+  @@index([integrationId])
+  @@map("whatsapp_conversations")
+}
+
+model WhatsAppMessage {
+  id                String                    @id @default(cuid())
+  restaurantId      String                    @map("restaurant_id")
+  integrationId     String?                   @map("integration_id")
+  conversationId    String?                   @map("conversation_id")
+  customerId        String?                   @map("customer_id")
+  messageLogId      String?                   @unique @map("message_log_id")
+  providerMessageId String?                   @unique @map("provider_message_id")
+  direction         WhatsAppMessageDirection
+  type              WhatsAppMessageType       @default(text)
+  status            WhatsAppMessageStatus     @default(received)
+  fromPhone         String?                   @map("from_phone")
+  toPhone           String?                   @map("to_phone")
+  body              String?                   @db.Text
+  rawPayload        Json?                     @map("raw_payload")
+  sentAt            DateTime?                 @map("sent_at")
+  deliveredAt       DateTime?                 @map("delivered_at")
+  readAt            DateTime?                 @map("read_at")
+  failedAt          DateTime?                 @map("failed_at")
+  createdAt         DateTime                  @default(now()) @map("created_at")
+
+  restaurant   Restaurant            @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  integration  WhatsAppIntegration?  @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+  conversation WhatsAppConversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  customer     Customer?             @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  messageLog   MessageLog?           @relation(fields: [messageLogId], references: [id], onDelete: SetNull)
+  statusEvents WhatsAppMessageStatusEvent[]
+
+  @@index([restaurantId, createdAt])
+  @@index([conversationId, createdAt])
+  @@index([customerId, createdAt])
+  @@index([integrationId])
+  @@map("whatsapp_messages")
+}
+
+model WhatsAppMessageStatusEvent {
+  id                String                @id @default(cuid())
+  restaurantId      String                @map("restaurant_id")
+  integrationId     String?               @map("integration_id")
+  messageId         String?               @map("message_id")
+  providerMessageId String                @map("provider_message_id")
+  status            WhatsAppMessageStatus
+  recipientPhone    String?               @map("recipient_phone")
+  errorCode         String?               @map("error_code")
+  errorMessage      String?               @map("error_message")
+  rawPayload        Json?                 @map("raw_payload")
+  occurredAt        DateTime              @map("occurred_at")
+  createdAt         DateTime              @default(now()) @map("created_at")
+
+  restaurant  Restaurant           @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  integration WhatsAppIntegration? @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+  message     WhatsAppMessage?     @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  @@index([restaurantId, occurredAt])
+  @@index([providerMessageId, occurredAt])
+  @@index([messageId])
+  @@index([integrationId])
+  @@map("whatsapp_message_status_events")
 }
 
 model RestaurantDomain {

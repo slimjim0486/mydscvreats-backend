@@ -23,6 +23,7 @@ import { gbpRoute } from "@/routes/gbp";
 import { ownerChatRoute } from "@/routes/owner-chat";
 import { menuPrintRoute, pdfExportRoute } from "@/routes/pdf-export";
 import { whatsappRoute } from "@/routes/whatsapp";
+import { whatsappWebhooksRoute } from "@/routes/whatsapp-webhooks";
 
 const app = new Hono();
 
@@ -54,6 +55,7 @@ app.route("/api/subscriptions", subscriptionsRoute);
 app.route("/api/analytics", analyticsRoute);
 app.route("/api/upload", uploadRoute);
 app.route("/api/whatsapp", whatsappRoute);
+app.route("/api/webhooks", whatsappWebhooksRoute);
 app.route("/api/gbp", gbpRoute);
 app.route("/api/menu-print", menuPrintRoute);
 app.route("/api/pdf-export", pdfExportRoute);
