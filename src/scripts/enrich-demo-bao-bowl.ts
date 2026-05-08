@@ -137,7 +137,7 @@ async function main() {
   }
 
   console.log(`\n  ${tagged} items tagged.`);
-  console.log(`\nDone! Check https://mydscvr.ai/bao-bowl`);
+  console.log(`\nDone! Check https://getbustan.com/bao-bowl`);
 }
 
 main()

@@ -568,7 +568,7 @@ async function seed() {
     update: {},
     create: {
       clerkId: "demo_dans_home_food_owner",
-      email: "demo-dans@mydscvr.ai",
+      email: "demo-dans@getbustan.com",
       fullName: "Daniel Pickin",
       role: "restaurant_owner",
     },
@@ -688,7 +688,7 @@ async function seed() {
   console.log(`  Items with AI notes: ${notesCount}`);
   console.log(`  Dietary tags linked: ${tagsLinked}`);
   console.log(`  Subscription: Pro (active)`);
-  console.log(`\n  Live at: https://mydscvr.ai/${restaurant.slug}`);
+  console.log(`\n  Live at: https://getbustan.com/${restaurant.slug}`);
   console.log(`\n  To clean up: npx tsx src/scripts/seed-demo-dans-home-food.ts --cleanup`);
   console.log("  Done!");
 }

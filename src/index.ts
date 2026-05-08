@@ -32,7 +32,7 @@ app.use("*", logger());
 app.use(
   "*",
   cors({
-    origin: [env.FRONTEND_APP_URL, "https://mydscvr.ai"],
+    origin: [env.FRONTEND_APP_URL, "https://getbustan.com"],
     allowHeaders: ["Content-Type", "Authorization"],
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   })
@@ -68,7 +68,7 @@ serve(
     port: env.PORT,
   },
   (info) => {
-    console.log(`mydscvr Eats backend listening on http://localhost:${info.port}`);
+    console.log(`Bustan backend listening on http://localhost:${info.port}`);
   }
 );
 

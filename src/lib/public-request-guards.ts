@@ -9,12 +9,12 @@ type RateLimitBucket = {
 };
 
 declare global {
-  var __mydscvrPublicRateLimitStore: Map<string, RateLimitBucket> | undefined;
+  var __bustanPublicRateLimitStore: Map<string, RateLimitBucket> | undefined;
 }
 
 const rateLimitStore =
-  globalThis.__mydscvrPublicRateLimitStore ??
-  (globalThis.__mydscvrPublicRateLimitStore = new Map<string, RateLimitBucket>());
+  globalThis.__bustanPublicRateLimitStore ??
+  (globalThis.__bustanPublicRateLimitStore = new Map<string, RateLimitBucket>());
 
 function normalizeOrigin(value: string | null) {
   if (!value) {
@@ -30,7 +30,7 @@ function normalizeOrigin(value: string | null) {
 
 function getAllowedOrigins() {
   return new Set(
-    [env.FRONTEND_APP_URL, "https://getbustan.com", "https://mydscvr.ai"].map((origin) =>
+    [env.FRONTEND_APP_URL, "https://getbustan.com", "https://getbustan.com"].map((origin) =>
       origin.replace(/\/$/, "")
     )
   );

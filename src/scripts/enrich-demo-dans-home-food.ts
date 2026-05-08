@@ -55,7 +55,7 @@ async function main() {
               slot: 0,
               isPrimary: true,
               imageStatus: "none",
-              originType: "mydscvr_ai",
+              originType: "bustan_ai",
               derivationType: "synthetic_generation",
             },
           });
@@ -76,7 +76,7 @@ async function main() {
   console.log(`  Queued for generation: ${queued}`);
   console.log(`  Skipped (already have images): ${skipped}`);
   console.log(`\nThe backend worker will process these jobs automatically.`);
-  console.log(`Check progress at: https://mydscvr.ai/dans-home-food`);
+  console.log(`Check progress at: https://getbustan.com/dans-home-food`);
 }
 
 main()

@@ -139,7 +139,7 @@ async function main() {
   }
 
   console.log(`\n  ${tagged} items tagged.`);
-  console.log(`\nDone! Check https://mydscvr.ai/sweet-spot-desserts`);
+  console.log(`\nDone! Check https://getbustan.com/sweet-spot-desserts`);
 }
 
 main()

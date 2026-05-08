@@ -142,7 +142,7 @@ async function main() {
   }
 
   console.log(`\n  ${tagged} items tagged.`);
-  console.log(`\nDone! Check https://mydscvr.ai/levant-grill`);
+  console.log(`\nDone! Check https://getbustan.com/levant-grill`);
 }
 
 main()

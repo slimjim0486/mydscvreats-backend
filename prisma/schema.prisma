@@ -53,7 +53,7 @@ enum PromotionType {
 
 enum MenuItemImageOrigin {
   legacy_unspecified
-  mydscvr_ai
+  bustan_ai
   owner_upload
   menu_source_upload
 }

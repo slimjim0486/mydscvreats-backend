@@ -17,8 +17,8 @@ const RESTAURANT = {
   location: "Dubai, UAE",
   address: "Al Wasl Road, Jumeirah 1, Dubai, UAE",
   phone: "+971 4 555 0789",
-  logoUrl: "https://eats-images.mydscvr.ai/demo-restaurants/levant-grill/logo.jpg",
-  coverImageUrl: "https://eats-images.mydscvr.ai/demo-restaurants/levant-grill/cover.jpg",
+  logoUrl: "https://images.getbustan.com/demo-restaurants/levant-grill/logo.jpg",
+  coverImageUrl: "https://images.getbustan.com/demo-restaurants/levant-grill/cover.jpg",
   operatingHours: {
     timezone: "Asia/Dubai",
     schedule: [
@@ -399,7 +399,7 @@ async function seed() {
     update: {},
     create: {
       clerkId: "demo_levant_grill_owner",
-      email: "demo-levant@mydscvr.ai",
+      email: "demo-levant@getbustan.com",
       fullName: "Demo Owner (Levant Grill)",
       role: "restaurant_owner",
     },
@@ -516,7 +516,7 @@ async function seed() {
   console.log(`  Items with AI notes: ${notesCount}`);
   console.log(`  Dietary tags linked: ${tagsLinked}`);
   console.log(`  Subscription: Pro (active)`);
-  console.log(`\n  Live at: https://mydscvr.ai/${restaurant.slug}`);
+  console.log(`\n  Live at: https://getbustan.com/${restaurant.slug}`);
   console.log(`\n  To clean up: npx tsx src/scripts/seed-demo-levant-grill.ts --cleanup`);
   console.log("  Done!");
 }

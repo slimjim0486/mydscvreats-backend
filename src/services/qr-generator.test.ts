@@ -47,7 +47,7 @@ test("shared QR settings are print-safe", () => {
 
 test("portfolio QR card keeps dark modules well inside the outer edge", async () => {
   const result = await generatePortfolioQrCode({
-    url: "https://mydscvr.ai/test-restaurant",
+    url: "https://getbustan.com/test-restaurant",
     brandName: "Test Restaurant",
     format: "png",
     size: 600,
@@ -66,7 +66,7 @@ test("portfolio QR card keeps dark modules well inside the outer edge", async ()
 
 test("square QR keeps dark modules away from the edge", async () => {
   const result = await generateSquareQrCode({
-    url: "https://mydscvr.ai/r/AbC1234",
+    url: "https://getbustan.com/r/AbC1234",
     label: "Launch Kit",
     format: "png",
     size: 600,
@@ -82,7 +82,7 @@ test("square QR keeps dark modules away from the edge", async () => {
 });
 
 test("data-url QR keeps quiet zone for PDF export", async () => {
-  const dataUrl = await generateQrDataUrl("https://mydscvr.ai/test-restaurant", 300);
+  const dataUrl = await generateQrDataUrl("https://getbustan.com/test-restaurant", 300);
   const buffer = decodeDataUrl(dataUrl);
   const metadata = await sharp(buffer).metadata();
 

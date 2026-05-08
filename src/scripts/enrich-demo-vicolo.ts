@@ -132,7 +132,7 @@ async function main() {
   }
 
   console.log(`\n  ${tagged} items tagged.`);
-  console.log(`\nDone! Check https://mydscvr.ai/vicolo`);
+  console.log(`\nDone! Check https://getbustan.com/vicolo`);
 }
 
 main()

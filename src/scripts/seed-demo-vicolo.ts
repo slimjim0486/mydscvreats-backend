@@ -16,8 +16,8 @@ const RESTAURANT = {
   location: "DIFC, Dubai",
   address: "Gate Village 3, DIFC, Dubai, UAE",
   phone: "+971 4 555 0456",
-  logoUrl: "https://eats-images.mydscvr.ai/demo-restaurants/vicolo/logo.jpg",
-  coverImageUrl: "https://eats-images.mydscvr.ai/demo-restaurants/vicolo/cover.jpg",
+  logoUrl: "https://images.getbustan.com/demo-restaurants/vicolo/logo.jpg",
+  coverImageUrl: "https://images.getbustan.com/demo-restaurants/vicolo/cover.jpg",
 };
 
 const SECTIONS: Array<{
@@ -185,7 +185,7 @@ async function main() {
     update: {},
     create: {
       clerkId: "demo_vicolo_owner",
-      email: "demo-vicolo@mydscvr.ai",
+      email: "demo-vicolo@getbustan.com",
       fullName: "Demo Owner (Vicolo)",
       role: "restaurant_owner",
     },
@@ -270,7 +270,7 @@ async function main() {
   }
 
   console.log(`\n  Total: ${totalItems} items, ${notesCount} with AI chef notes`);
-  console.log(`\n  Live at: https://mydscvr.ai/${restaurant.slug}`);
+  console.log(`\n  Live at: https://getbustan.com/${restaurant.slug}`);
   console.log("  Done!");
 }
 

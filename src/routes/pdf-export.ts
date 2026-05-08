@@ -58,7 +58,7 @@ export const menuPrintRoute = new Hono()
       const entitlements = getRestaurantEntitlements(restaurant);
 
       const restaurantQr = await generateQrDataUrl(
-        `https://mydscvr.ai/${restaurant.slug}`,
+        `https://getbustan.com/${restaurant.slug}`,
         300
       );
 

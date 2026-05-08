@@ -17,8 +17,8 @@ const RESTAURANT = {
   location: "Dubai, UAE",
   address: "City Walk, Al Safa Street, Dubai, UAE",
   phone: "+971 4 555 0321",
-  logoUrl: "https://eats-images.mydscvr.ai/demo-restaurants/sweet-spot-desserts/logo.jpg",
-  coverImageUrl: "https://eats-images.mydscvr.ai/demo-restaurants/sweet-spot-desserts/cover.jpg",
+  logoUrl: "https://images.getbustan.com/demo-restaurants/sweet-spot-desserts/logo.jpg",
+  coverImageUrl: "https://images.getbustan.com/demo-restaurants/sweet-spot-desserts/cover.jpg",
   operatingHours: {
     timezone: "Asia/Dubai",
     schedule: [
@@ -372,7 +372,7 @@ async function seed() {
     update: {},
     create: {
       clerkId: "demo_sweet_spot_owner",
-      email: "demo-sweetspot@mydscvr.ai",
+      email: "demo-sweetspot@getbustan.com",
       fullName: "Demo Owner (Sweet Spot)",
       role: "restaurant_owner",
     },
@@ -489,7 +489,7 @@ async function seed() {
   console.log(`  Items with AI notes: ${notesCount}`);
   console.log(`  Dietary tags linked: ${tagsLinked}`);
   console.log(`  Subscription: Pro (active)`);
-  console.log(`\n  Live at: https://mydscvr.ai/${restaurant.slug}`);
+  console.log(`\n  Live at: https://getbustan.com/${restaurant.slug}`);
   console.log(`\n  To clean up: npx tsx src/scripts/seed-demo-sweet-spot-desserts.ts --cleanup`);
   console.log("  Done!");
 }

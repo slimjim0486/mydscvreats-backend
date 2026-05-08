@@ -17,8 +17,8 @@ const RESTAURANT = {
   location: "Dubai, UAE",
   address: "Box Park, Al Wasl, Dubai, UAE",
   phone: "+971 4 555 0654",
-  logoUrl: "https://eats-images.mydscvr.ai/demo-restaurants/bao-bowl/logo.jpg",
-  coverImageUrl: "https://eats-images.mydscvr.ai/demo-restaurants/bao-bowl/cover.jpg",
+  logoUrl: "https://images.getbustan.com/demo-restaurants/bao-bowl/logo.jpg",
+  coverImageUrl: "https://images.getbustan.com/demo-restaurants/bao-bowl/cover.jpg",
   operatingHours: {
     timezone: "Asia/Dubai",
     schedule: [
@@ -349,7 +349,7 @@ async function seed() {
     update: {},
     create: {
       clerkId: "demo_bao_bowl_owner",
-      email: "demo-baobowl@mydscvr.ai",
+      email: "demo-baobowl@getbustan.com",
       fullName: "Demo Owner (Bao & Bowl)",
       role: "restaurant_owner",
     },
@@ -466,7 +466,7 @@ async function seed() {
   console.log(`  Items with AI notes: ${notesCount}`);
   console.log(`  Dietary tags linked: ${tagsLinked}`);
   console.log(`  Subscription: Pro (active)`);
-  console.log(`\n  Live at: https://mydscvr.ai/${restaurant.slug}`);
+  console.log(`\n  Live at: https://getbustan.com/${restaurant.slug}`);
   console.log(`\n  To clean up: npx tsx src/scripts/seed-demo-bao-bowl.ts --cleanup`);
   console.log("  Done!");
 }

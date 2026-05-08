@@ -19,8 +19,8 @@ const RESTAURANT = {
   location: "Downtown Dubai",
   address: "City Walk, Al Safa Street, Dubai, UAE",
   phone: "+971 4 555 0123",
-  logoUrl: "https://eats-images.mydscvr.ai/demo-restaurants/zafran-house/logo.jpg",
-  coverImageUrl: "https://eats-images.mydscvr.ai/demo-restaurants/zafran-house/cover.jpg",
+  logoUrl: "https://images.getbustan.com/demo-restaurants/zafran-house/logo.jpg",
+  coverImageUrl: "https://images.getbustan.com/demo-restaurants/zafran-house/cover.jpg",
 };
 
 const SECTIONS: Array<{
@@ -183,7 +183,7 @@ async function main() {
     update: {},
     create: {
       clerkId: "demo_zafran_house_owner",
-      email: "demo-zafran@mydscvr.ai",
+      email: "demo-zafran@getbustan.com",
       fullName: "Demo Owner (Zafran House)",
       role: "restaurant_owner",
     },
@@ -269,7 +269,7 @@ async function main() {
   }
 
   console.log(`\n  Total: ${totalItems} items, ${notesCount} with AI chef notes`);
-  console.log(`\n  Live at: https://mydscvr.ai/${restaurant.slug}`);
+  console.log(`\n  Live at: https://getbustan.com/${restaurant.slug}`);
   console.log("  Done!");
 }
 

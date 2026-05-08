@@ -56,7 +56,7 @@ async function cloneLoadedSection(
           imageStatus: string;
           promptModifier: string | null;
           isPrimary: boolean;
-          originType: "legacy_unspecified" | "mydscvr_ai" | "owner_upload" | "menu_source_upload";
+          originType: "legacy_unspecified" | "bustan_ai" | "owner_upload" | "menu_source_upload";
           derivationType: "original" | "truth_preserving_edit" | "synthetic_generation";
           parentImageId: string | null;
         }>;

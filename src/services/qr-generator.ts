@@ -57,7 +57,7 @@ export async function generatePortfolioQrCode(input: {
   const qrSvg = await renderQrSvg(input.url, qrSize);
 
   const footerText = input.includeBranding
-    ? `${input.brandName} • mydscvr Eats • ${PRESET_LABELS[preset]}`
+    ? `${input.brandName} • Bustan • ${PRESET_LABELS[preset]}`
     : `${input.brandName} • ${PRESET_LABELS[preset]}`;
 
   const svg = `

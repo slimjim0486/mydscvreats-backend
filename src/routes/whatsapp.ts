@@ -74,7 +74,7 @@ function buildWhatsappMessage(input: {
   promotionTitle?: string | null;
 }) {
   const intro =
-    input.prefill?.trim() || `Hi, I found your menu on MyDscvr Eats`;
+    input.prefill?.trim() || `Hi, I found your menu on Bustan`;
 
   if (input.itemName) {
     return `${intro} and I'm interested in ${input.itemName}. Is it available now?`;
@@ -133,7 +133,7 @@ function buildCartWhatsappMessage(input: {
     input.customer?.fulfillmentMethod === "pickup" ? "Pickup" : "Delivery";
 
   return [
-    `New Order from mydscvr.ai/${input.slug}`,
+    `New Order from getbustan.com/${input.slug}`,
     "",
     ...itemLines,
     "",

@@ -140,7 +140,7 @@ async function main() {
   }
 
   console.log(`\n  ${tagged} items tagged.\n`);
-  console.log(`Done! Check https://mydscvr.ai/zafran-house`);
+  console.log(`Done! Check https://getbustan.com/zafran-house`);
   console.log("Images will appear as the Railway worker processes the queue.");
 }
 
