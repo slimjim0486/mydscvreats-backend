@@ -15,6 +15,21 @@ function isNetworkTimeoutError(error: unknown) {
   return stack.includes("ETIMEDOUT") || stack.includes("fetch failed");
 }
 
+function isTokenVerificationError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+
+  const record = error as Record<string, unknown>;
+  const name = typeof record.name === "string" ? record.name : "";
+  const reason = typeof record.reason === "string" ? record.reason : "";
+  const message = error instanceof Error ? error.message : String(error);
+
+  return (
+    name.includes("TokenVerificationError") ||
+    reason.startsWith("token-") ||
+    message.includes("Invalid JWT")
+  );
+}
+
 export async function resolveAuthHeader(authHeader: string | undefined) {
   if (!authHeader?.startsWith("Bearer ")) {
     throw new ApiError("Missing authorization header", 401);
@@ -35,6 +50,10 @@ export async function resolveAuthHeader(authHeader: string | undefined) {
         "Authentication verification timed out while reaching Clerk. Retry the request, or configure CLERK_JWT_KEY for networkless verification.",
         503
       );
+    }
+
+    if (isTokenVerificationError(error)) {
+      throw new ApiError("Invalid authorization token", 401);
     }
 
     throw error;
