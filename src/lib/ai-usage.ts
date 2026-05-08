@@ -6,7 +6,8 @@ export type AiFeature =
   | "tag_analysis"
   | "menu_analysis"
   | "image_enhancement"
-  | "owner_chat";
+  | "owner_chat"
+  | "seo_analysis";
 
 export async function checkAiLimit(
   restaurantId: string,
@@ -39,11 +40,13 @@ export async function logAiUsage(
   restaurantId: string,
   feature: AiFeature,
   tokensIn: number,
-  tokensOut: number
+  tokensOut: number,
+  extraCostUsd = 0
 ) {
   const costPerInputToken = 0.000003;
   const costPerOutputToken = 0.000015;
-  const costUsd = tokensIn * costPerInputToken + tokensOut * costPerOutputToken;
+  const costUsd =
+    tokensIn * costPerInputToken + tokensOut * costPerOutputToken + extraCostUsd;
 
   await prisma.aiUsageLog.create({
     data: {

@@ -38,6 +38,13 @@ enum GbpConnectionStatus {
   verified
 }
 
+enum SeoStatus {
+  queued
+  running
+  succeeded
+  failed
+}
+
 enum PromotionType {
   discounted_item
   deal
@@ -214,6 +221,7 @@ model Restaurant {
   slugAliases               RestaurantSlugAlias[]
   promotions                Promotion[]
   gbpConnection             GbpConnection?
+  seoAnalyses               SeoAnalysis[]
 
   @@index([ownerId])
   @@index([operatorAccountId])
@@ -952,6 +960,32 @@ model MenuAnalysis {
 
   @@index([restaurantId, analysisType])
   @@map("menu_analyses")
+}
+
+model SeoAnalysis {
+  id              String    @id @default(cuid())
+  restaurantId    String    @map("restaurant_id")
+  restaurant      Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  status          SeoStatus @default(queued)
+  inputsHash      String    @map("inputs_hash")
+  overallScore    Int?      @map("overall_score")
+  gbpScore        Int?      @map("gbp_score")
+  onPageScore     Int?      @map("on_page_score")
+  rankGridScore   Int?      @map("rank_grid_score")
+  citationsScore  Int?      @map("citations_score")
+  reviewsScore    Int?      @map("reviews_score")
+  rawData         Json      @map("raw_data")
+  scorecard       Json
+  recommendations Json
+  progress        Json?
+  errorMessage    String?   @map("error_message")
+  costUsd         Decimal?  @map("cost_usd") @db.Decimal(10, 4)
+  createdAt       DateTime  @default(now()) @map("created_at")
+  completedAt     DateTime? @map("completed_at")
+
+  @@index([restaurantId, createdAt])
+  @@index([inputsHash])
+  @@map("seo_analyses")
 }
 
 model AiUsageLog {

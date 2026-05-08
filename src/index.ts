@@ -20,6 +20,7 @@ import { shortLinksRoute } from "@/routes/short-links";
 import { subscriptionsRoute } from "@/routes/subscriptions";
 import { uploadRoute } from "@/routes/upload";
 import { gbpRoute } from "@/routes/gbp";
+import { seoRoute } from "@/routes/seo";
 import { ownerChatRoute } from "@/routes/owner-chat";
 import { menuPrintRoute, pdfExportRoute } from "@/routes/pdf-export";
 import { whatsappRoute } from "@/routes/whatsapp";
@@ -57,6 +58,7 @@ app.route("/api/upload", uploadRoute);
 app.route("/api/whatsapp", whatsappRoute);
 app.route("/api/webhooks", whatsappWebhooksRoute);
 app.route("/api/gbp", gbpRoute);
+app.route("/api/seo", seoRoute);
 app.route("/api/menu-print", menuPrintRoute);
 app.route("/api/pdf-export", pdfExportRoute);
 

@@ -1,6 +1,7 @@
 export type SubscriptionPlan = "starter" | "pro" | "portfolio";
 export type AnalyticsTier = "basic" | "advanced";
 export type MenuAnalysisLevel = "basic" | "full";
+export type SeoAnalysisDepth = "lite" | "full";
 export type SubscriptionStatus = "trial" | "active" | "paused" | "cancelled";
 export type PortfolioActivationState = "inactive" | "pending_setup" | "active";
 
@@ -26,6 +27,8 @@ export interface PlanEntitlements {
   aiTagAnalysisLimit: number | null;
   menuAnalysisLevel: MenuAnalysisLevel;
   analysisLimit: number | null;
+  seoAnalysisLimit: number | null;
+  seoAnalysisDepth: SeoAnalysisDepth;
   multiBrandEnable: boolean;
   menuCloningEnabled: boolean;
   crossBrandAnalyticsEnabled: boolean;
@@ -58,6 +61,8 @@ const PLAN_ENTITLEMENTS: Record<
     aiTagAnalysisLimit: 1,
     menuAnalysisLevel: "basic",
     analysisLimit: 1,
+    seoAnalysisLimit: 0,
+    seoAnalysisDepth: "lite",
     multiBrandEnable: false,
     menuCloningEnabled: false,
     crossBrandAnalyticsEnabled: false,
@@ -85,6 +90,8 @@ const PLAN_ENTITLEMENTS: Record<
     aiTagAnalysisLimit: null,
     menuAnalysisLevel: "full",
     analysisLimit: null,
+    seoAnalysisLimit: 2,
+    seoAnalysisDepth: "full",
     multiBrandEnable: false,
     menuCloningEnabled: false,
     crossBrandAnalyticsEnabled: false,
@@ -112,6 +119,8 @@ const PLAN_ENTITLEMENTS: Record<
     aiTagAnalysisLimit: null,
     menuAnalysisLevel: "full",
     analysisLimit: null,
+    seoAnalysisLimit: 10,
+    seoAnalysisDepth: "full",
     multiBrandEnable: true,
     menuCloningEnabled: true,
     crossBrandAnalyticsEnabled: true,
@@ -143,6 +152,8 @@ const DRAFT_ENTITLEMENTS: PlanEntitlements = {
   aiTagAnalysisLimit: 1,
   menuAnalysisLevel: "basic",
   analysisLimit: 1,
+  seoAnalysisLimit: 0,
+  seoAnalysisDepth: "lite",
   multiBrandEnable: false,
   menuCloningEnabled: false,
   crossBrandAnalyticsEnabled: false,

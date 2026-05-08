@@ -22,7 +22,7 @@ Return ONLY valid JSON. No preamble, no explanation.`;
 
 let anthropic: Anthropic | null = null;
 
-function getClient() {
+export function getAnthropicClient() {
   if (!env.ANTHROPIC_API_KEY) {
     return null;
   }
@@ -81,7 +81,7 @@ export async function extractMenuFromSource(input: {
   contentType?: string;
   base64?: string;
 }) {
-  const client = getClient();
+  const client = getAnthropicClient();
   const fallbackSource = [
     input.fileName ? `File: ${input.fileName}` : null,
     input.sourceText,

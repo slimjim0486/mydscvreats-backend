@@ -30,7 +30,7 @@ function normalizeOrigin(value: string | null) {
 
 function getAllowedOrigins() {
   return new Set(
-    [env.FRONTEND_APP_URL, "https://mydscvr.ai"].map((origin) =>
+    [env.FRONTEND_APP_URL, "https://getbustan.com", "https://mydscvr.ai"].map((origin) =>
       origin.replace(/\/$/, "")
     )
   );
