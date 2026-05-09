@@ -7,13 +7,32 @@ import type { MenuExtractionDraft } from "./types";
 const MENU_EXTRACTION_TOOL_NAME = "record_menu_extraction";
 const MENU_EXTRACTION_MAX_TOKENS = 16384;
 
-const SYSTEM_PROMPT = [
+const DETAILED_SYSTEM_PROMPT = [
   "You are a menu extraction assistant for restaurants.",
   "Extract all visible menu sections, item names, descriptions, and prices from the provided text, image, or PDF.",
   "Use 0 for prices that are missing or unreadable.",
+  "Keep descriptions concise, at most 140 characters.",
+  "Ignore duplicate modifier rows, legal text, QR instructions, delivery app notes, social media handles, and allergen disclaimers unless they are part of an item description.",
   "Preserve the restaurant's original section and dish wording where practical.",
   "Call the record_menu_extraction tool with the complete extracted menu.",
 ].join(" ");
+
+const COMPACT_SYSTEM_PROMPT = [
+  "You are a menu extraction assistant for restaurants.",
+  "The first extraction attempt was too large, so produce a compact extraction that still gives the user an editable menu draft.",
+  "Prioritize section names, item names, and numeric prices.",
+  "Set description to null unless a very short description is essential to distinguish the item.",
+  "Ignore duplicate modifier rows, legal text, QR instructions, delivery app notes, social media handles, and allergen disclaimers.",
+  "If the source contains many repeated variants, keep the main menu item and omit repetitive add-ons.",
+  "Call the record_menu_extraction tool with the compact extracted menu.",
+].join(" ");
+
+class MenuExtractionTooLargeError extends Error {
+  constructor() {
+    super("Menu extraction response exceeded the output token budget");
+    this.name = "MenuExtractionTooLargeError";
+  }
+}
 
 const priceSchema = z.preprocess((value) => {
   if (typeof value === "string") {
@@ -177,10 +196,40 @@ export async function extractMenuFromSource(input: {
     return fallbackExtraction(fallbackSource);
   }
 
+  try {
+    return await extractMenuWithClaude(client, input, fallbackSource, DETAILED_SYSTEM_PROMPT);
+  } catch (error) {
+    if (!(error instanceof MenuExtractionTooLargeError)) {
+      throw error;
+    }
+  }
+
+  try {
+    return await extractMenuWithClaude(client, input, fallbackSource, COMPACT_SYSTEM_PROMPT);
+  } catch (error) {
+    if (error instanceof MenuExtractionTooLargeError && fallbackSource.trim()) {
+      return fallbackExtraction(fallbackSource);
+    }
+
+    throw error;
+  }
+}
+
+async function extractMenuWithClaude(
+  client: Anthropic,
+  input: {
+    sourceText?: string;
+    fileName?: string;
+    contentType?: string;
+    base64?: string;
+  },
+  fallbackSource: string,
+  systemPrompt: string
+) {
   const response = await client.messages.create({
     model: "claude-sonnet-4-6",
     max_tokens: MENU_EXTRACTION_MAX_TOKENS,
-    system: SYSTEM_PROMPT,
+    system: systemPrompt,
     tools: [MENU_EXTRACTION_TOOL],
     tool_choice: {
       type: "tool",
@@ -227,10 +276,7 @@ export async function extractMenuFromSource(input: {
   });
 
   if (response.stop_reason === "max_tokens") {
-    throw new ApiError(
-      "Menu extraction was too large and was cut off. Please try a shorter menu or fewer pages.",
-      502
-    );
+    throw new MenuExtractionTooLargeError();
   }
 
   const toolUse = response.content.find(
