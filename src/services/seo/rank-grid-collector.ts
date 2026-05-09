@@ -23,7 +23,6 @@ const TITLE_KEYS = [
   "siteName",
 ] as const;
 const RANK_KEYS = ["position", "rank", "index"] as const;
-const QUERY_KEYS = ["searchQuery", "query", "searchString", "searchTerm", "keyword"] as const;
 const NAME_STOP_WORDS = new Set([
   "abu",
   "and",
@@ -73,20 +72,6 @@ function firstNumber(source: Record<string, unknown>, keys: readonly string[]) {
     if (typeof value === "string" && Number.isFinite(Number(value))) return Number(value);
   }
   return null;
-}
-
-function queryFromItem(item: Record<string, unknown>) {
-  for (const key of QUERY_KEYS) {
-    const value = item[key];
-    const direct = asString(value);
-    if (direct) return direct;
-    const nested = asRecord(value);
-    if (nested) {
-      const nestedValue = firstString(nested, ["term", "query", "searchTerm", "searchString"]);
-      if (nestedValue) return nestedValue;
-    }
-  }
-  return "";
 }
 
 interface SearchCandidate {
@@ -197,12 +182,40 @@ function buildGrid(lat: number | null, lng: number | null) {
 }
 
 function rankFromResults(items: Record<string, unknown>[], restaurantName: string) {
-  const candidates = items.flatMap(candidatesFromItem);
+  const candidates = items.flatMap((item, index) => {
+    const direct = candidateFromRecord(item, index + 1);
+    return [
+      ...(direct ? [direct] : []),
+      ...candidatesFromItem(item).filter((candidate) => candidate.title !== direct?.title),
+    ];
+  });
   const match = candidates.find((candidate) =>
     candidateMatches(candidate.title, restaurantName)
   );
 
   return match?.rank ?? null;
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T) => Promise<R>
+) {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await mapper(items[currentIndex]);
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, () => worker())
+  );
+  return results;
 }
 
 export async function collectRankGridData(
@@ -216,39 +229,47 @@ export async function collectRankGridData(
     primaryCells.map((cell) => ({
       keyword,
       cell,
-      query: [
-        keyword,
-        cell.lat && cell.lng ? `${cell.lat.toFixed(5)},${cell.lng.toFixed(5)}` : restaurant.location ?? restaurant.address ?? "Dubai",
-      ].join(" "),
+      locationQuery:
+        cell.lat && cell.lng
+          ? `${cell.lat.toFixed(5)},${cell.lng.toFixed(5)}`
+          : restaurant.location ?? restaurant.address ?? "Dubai",
     }))
   );
 
-  const result = await runActor<Record<string, unknown>>(
-    env.APIFY_ACTOR_GSEARCH,
-    {
-      queries: queryKeys.map((entry) => entry.query).join("\n"),
-      resultsPerPage: 10,
-      maxPagesPerQuery: 1,
-      languageCode: "en",
-      countryCode: "ae",
-    },
-    { timeoutMs: 300_000, estimateCostUsd: 0.12 }
-  );
+  const cellResults = await mapWithConcurrency(queryKeys, 4, async (entry) => {
+    const result = await runActor<Record<string, unknown>>(
+      env.APIFY_ACTOR_GMAPS,
+      {
+        searchStringsArray: [entry.keyword],
+        locationQuery: entry.locationQuery,
+        maxCrawledPlacesPerSearch: 10,
+        language: "en",
+        maxImages: 0,
+        includeOpeningHours: false,
+        scrapeSocialMediaProfiles: {
+          facebooks: false,
+          instagrams: false,
+          youtubes: false,
+          tiktoks: false,
+          twitters: false,
+        },
+        maximumLeadsEnrichmentRecords: 0,
+      },
+      { timeoutMs: 120_000, estimateCostUsd: 0.03 }
+    );
 
-  const resultsByQuery = new Map<string, Record<string, unknown>[]>();
-  for (const item of result.items) {
-    const query = queryFromItem(item);
-    if (!resultsByQuery.has(query)) {
-      resultsByQuery.set(query, []);
-    }
-    resultsByQuery.get(query)?.push(item);
-  }
+    return {
+      ...entry,
+      rank: rankFromResults(result.items, restaurant.name),
+      estimatedCostUsd: result.estimatedCostUsd,
+    };
+  });
 
   const keywordResults: RankGridKeywordResult[] = keywords.map((keyword) => {
-    const entries = queryKeys.filter((entry) => entry.keyword === keyword);
+    const entries = cellResults.filter((entry) => entry.keyword === keyword);
     const cells = entries.map((entry) => ({
       ...entry.cell,
-      rank: rankFromResults(resultsByQuery.get(entry.query) ?? result.items, restaurant.name),
+      rank: entry.rank,
     }));
     const foundRanks = cells
       .map((cell) => cell.rank)
@@ -268,6 +289,6 @@ export async function collectRankGridData(
     data: {
       keywords: keywordResults,
     } satisfies RankGridData,
-    estimatedCostUsd: result.estimatedCostUsd,
+    estimatedCostUsd: cellResults.reduce((sum, entry) => sum + entry.estimatedCostUsd, 0),
   };
 }
