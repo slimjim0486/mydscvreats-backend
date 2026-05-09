@@ -1,7 +1,5 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { checkAiLimit } from "@/lib/ai-usage";
-import { getRestaurantEntitlements } from "@/lib/entitlements";
 import { ApiError } from "@/lib/errors";
 import { errorResponse } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
@@ -84,19 +82,6 @@ export const seoRoute = new Hono<{
       const auth = c.get("auth");
       const data = createAnalysisSchema.parse(await c.req.json());
       const restaurant = await getOwnedRestaurant(data.restaurantId, auth.clerkId);
-      const entitlements = getRestaurantEntitlements(restaurant);
-      const limit = await checkAiLimit(
-        restaurant.id,
-        "seo_analysis",
-        entitlements.seoAnalysisLimit
-      );
-
-      if (!limit.allowed) {
-        throw new ApiError(
-          `SEO analysis limit reached (${limit.used}/${entitlements.seoAnalysisLimit} this month). Upgrade for more.`,
-          402
-        );
-      }
 
       const inputsHash = computeSeoInputsHash(restaurant as RestaurantSeoContext);
       if (!data.forceRefresh) {
