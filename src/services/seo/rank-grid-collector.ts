@@ -5,6 +5,40 @@ import type { GbpData, RankGridData, RankGridKeywordResult, RestaurantSeoContext
 const GRID_SIZE = 3;
 const GRID_SPACING_METERS = 500;
 const EARTH_LAT_METERS = 111_320;
+const RESULT_ARRAY_KEYS = [
+  "localResults",
+  "localPackResults",
+  "places",
+  "placeResults",
+  "mapsResults",
+  "organicResults",
+  "results",
+] as const;
+const TITLE_KEYS = [
+  "title",
+  "name",
+  "placeName",
+  "businessName",
+  "displayName",
+  "siteName",
+] as const;
+const RANK_KEYS = ["position", "rank", "index"] as const;
+const QUERY_KEYS = ["searchQuery", "query", "searchString", "searchTerm", "keyword"] as const;
+const NAME_STOP_WORDS = new Set([
+  "abu",
+  "and",
+  "best",
+  "cafe",
+  "dhabi",
+  "dubai",
+  "in",
+  "me",
+  "near",
+  "restaurant",
+  "restaurants",
+  "the",
+  "uae",
+]);
 
 function normalize(value: string | null | undefined) {
   return (value ?? "")
@@ -12,6 +46,101 @@ function normalize(value: string | null | undefined) {
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function asString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function firstString(source: Record<string, unknown>, keys: readonly string[]) {
+  for (const key of keys) {
+    const value = asString(source[key]);
+    if (value) return value;
+  }
+  return null;
+}
+
+function firstNumber(source: Record<string, unknown>, keys: readonly string[]) {
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && Number.isFinite(Number(value))) return Number(value);
+  }
+  return null;
+}
+
+function queryFromItem(item: Record<string, unknown>) {
+  for (const key of QUERY_KEYS) {
+    const value = item[key];
+    const direct = asString(value);
+    if (direct) return direct;
+    const nested = asRecord(value);
+    if (nested) {
+      const nestedValue = firstString(nested, ["term", "query", "searchTerm", "searchString"]);
+      if (nestedValue) return nestedValue;
+    }
+  }
+  return "";
+}
+
+interface SearchCandidate {
+  title: string;
+  rank: number;
+}
+
+function candidateFromRecord(record: Record<string, unknown>, fallbackRank: number) {
+  const title = firstString(record, TITLE_KEYS);
+  if (!title) return null;
+  return {
+    title,
+    rank: firstNumber(record, RANK_KEYS) ?? fallbackRank,
+  } satisfies SearchCandidate;
+}
+
+function candidatesFromItem(item: Record<string, unknown>) {
+  const candidates: SearchCandidate[] = [];
+  const direct = candidateFromRecord(item, candidates.length + 1);
+  if (direct) candidates.push(direct);
+
+  for (const key of RESULT_ARRAY_KEYS) {
+    const value = item[key];
+    if (!Array.isArray(value)) continue;
+    value.forEach((entry, index) => {
+      const record = asRecord(entry);
+      if (!record) return;
+      const candidate = candidateFromRecord(record, index + 1);
+      if (candidate) candidates.push(candidate);
+    });
+  }
+
+  return candidates;
+}
+
+function nameTokens(value: string) {
+  return normalize(value)
+    .split(" ")
+    .filter((token) => token.length > 1 && !NAME_STOP_WORDS.has(token));
+}
+
+function candidateMatches(candidateTitle: string, restaurantName: string) {
+  const candidate = normalize(candidateTitle);
+  const target = normalize(restaurantName);
+  if (!candidate || !target) return false;
+  if (candidate === target || candidate.includes(target) || target.includes(candidate)) {
+    return true;
+  }
+
+  const targetTokens = nameTokens(restaurantName);
+  if (targetTokens.length === 0) return false;
+  const candidateTokens = new Set(nameTokens(candidateTitle));
+  const matches = targetTokens.filter((token) => candidateTokens.has(token)).length;
+  return matches >= Math.max(2, Math.ceil(targetTokens.length * 0.75));
 }
 
 function inferCity(restaurant: RestaurantSeoContext) {
@@ -68,21 +197,12 @@ function buildGrid(lat: number | null, lng: number | null) {
 }
 
 function rankFromResults(items: Record<string, unknown>[], restaurantName: string) {
-  const target = normalize(restaurantName);
-  const candidates = items
-    .map((item) => normalize(String(item.title ?? item.name ?? item.placeName ?? "")))
-    .filter(Boolean);
-  const exactIndex = candidates.findIndex((candidate) => candidate === target);
-
-  if (exactIndex >= 0) {
-    return exactIndex + 1;
-  }
-
-  const fuzzyIndex = candidates.findIndex(
-    (candidate) => candidate.includes(target) || target.includes(candidate)
+  const candidates = items.flatMap(candidatesFromItem);
+  const match = candidates.find((candidate) =>
+    candidateMatches(candidate.title, restaurantName)
   );
 
-  return fuzzyIndex >= 0 ? fuzzyIndex + 1 : null;
+  return match?.rank ?? null;
 }
 
 export async function collectRankGridData(
@@ -117,7 +237,7 @@ export async function collectRankGridData(
 
   const resultsByQuery = new Map<string, Record<string, unknown>[]>();
   for (const item of result.items) {
-    const query = String(item.searchQuery ?? item.query ?? item.searchString ?? "");
+    const query = queryFromItem(item);
     if (!resultsByQuery.has(query)) {
       resultsByQuery.set(query, []);
     }
