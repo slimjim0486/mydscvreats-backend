@@ -18,7 +18,13 @@ function actorIdToPath(actorId: string) {
 export async function runActor<T = Record<string, unknown>>(
   actorId: string | null | undefined,
   input: unknown,
-  options: { timeoutMs?: number; estimateCostUsd?: number } = {}
+  options: {
+    timeoutMs?: number;
+    estimateCostUsd?: number;
+    maxItems?: number;
+    maxTotalChargeUsd?: number;
+    memoryMbytes?: number;
+  } = {}
 ): Promise<ApifyRunResult<T>> {
   if (!actorId) {
     return {
@@ -34,10 +40,18 @@ export async function runActor<T = Record<string, unknown>>(
 
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const url = new URL(`${APIFY_API_BASE}/acts/${actorIdToPath(actorId)}/run-sync-get-dataset-items`);
-  url.searchParams.set("token", env.APIFY_API_TOKEN);
   url.searchParams.set("timeout", String(Math.ceil(timeoutMs / 1000)));
   url.searchParams.set("clean", "true");
   url.searchParams.set("format", "json");
+  if (options.maxItems !== undefined) {
+    url.searchParams.set("maxItems", String(options.maxItems));
+  }
+  if (options.maxTotalChargeUsd !== undefined) {
+    url.searchParams.set("maxTotalChargeUsd", String(options.maxTotalChargeUsd));
+  }
+  if (options.memoryMbytes !== undefined) {
+    url.searchParams.set("memory", String(options.memoryMbytes));
+  }
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs + 5_000);
@@ -47,6 +61,7 @@ export async function runActor<T = Record<string, unknown>>(
     const response = await fetch(url, {
       method: "POST",
       headers: {
+        Authorization: `Bearer ${env.APIFY_API_TOKEN}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(input ?? {}),

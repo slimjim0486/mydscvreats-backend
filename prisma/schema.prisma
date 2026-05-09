@@ -988,6 +988,50 @@ model SeoAnalysis {
   @@map("seo_analyses")
 }
 
+model AuditLead {
+  id             String       @id @default(cuid())
+  phone          String
+  email          String?
+  restaurantName String       @map("restaurant_name")
+  location       String
+  ipHash         String       @map("ip_hash")
+  userAgent      String?      @map("user_agent")
+  source         String?
+  reportId       String?      @map("report_id")
+  report         AuditReport? @relation(fields: [reportId], references: [id], onDelete: SetNull)
+  createdAt      DateTime     @default(now()) @map("created_at")
+
+  @@index([phone])
+  @@index([createdAt])
+  @@map("audit_leads")
+}
+
+model AuditReport {
+  id               String      @id @default(cuid())
+  slug             String      @unique
+  inputsHash       String      @map("inputs_hash")
+  status           SeoStatus   @default(queued)
+  restaurantName   String      @map("restaurant_name")
+  location         String
+  primaryCuisine   String?     @map("primary_cuisine")
+  scorecard        Json?
+  rawData          Json?       @map("raw_data")
+  recommendations  Json?
+  photoScores      Json?       @map("photo_scores")
+  peerBenchmark    Json?       @map("peer_benchmark")
+  executiveSummary String?     @map("executive_summary")
+  errorMessage     String?     @map("error_message")
+  costUsd          Decimal?    @map("cost_usd") @db.Decimal(10, 4)
+  progress         Json?
+  completedAt      DateTime?   @map("completed_at")
+  createdAt        DateTime    @default(now()) @map("created_at")
+  leads            AuditLead[]
+
+  @@index([inputsHash, status])
+  @@index([createdAt])
+  @@map("audit_reports")
+}
+
 model AiUsageLog {
   id           String   @id @default(cuid())
   restaurantId String   @map("restaurant_id")

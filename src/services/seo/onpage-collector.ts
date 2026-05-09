@@ -80,7 +80,11 @@ export async function collectOnPageData(restaurant: RestaurantSeoContext) {
       saveHtml: false,
       saveMarkdown: false,
     },
-    { timeoutMs: 120_000 }
+    {
+      timeoutMs: 120_000,
+      maxItems: 8,
+      maxTotalChargeUsd: 0.05,
+    }
   );
 
   const homepage = result.items.find((item) => asString(item.url) === restaurant.website) ?? result.items[0] ?? {};

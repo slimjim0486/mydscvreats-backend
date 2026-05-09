@@ -26,6 +26,26 @@ function firstNumber(source: Record<string, unknown>, keys: string[]) {
   return null;
 }
 
+function firstWebsite(source: Record<string, unknown>) {
+  const value = firstString(source, [
+    "website",
+    "websiteUrl",
+    "businessWebsite",
+    "domain",
+  ]);
+  if (!value) return null;
+
+  try {
+    const url = new URL(value.startsWith("http") ? value : `https://${value}`);
+    const host = url.hostname.toLowerCase();
+    if (host === "google.com" || host.endsWith(".google.com")) return null;
+    if (host === "google.ae" || host.endsWith(".google.ae")) return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 function nestedNumber(source: Record<string, unknown>, objectKey: string, valueKey: string) {
   const parent = source[objectKey];
   if (!parent || typeof parent !== "object") return null;
@@ -104,6 +124,8 @@ function buildReviewsInput(restaurant: RestaurantSeoContext) {
     placeIds: placeId ? [placeId] : undefined,
     searchStringsArray: placeId ? undefined : searchStringsArray,
     maxReviews: 50,
+    maxReviewsPerPlace: 50,
+    reviewsLimit: 50,
     language: "en",
     reviewsSort: "newest",
   };
@@ -115,7 +137,7 @@ function scoreMapsCandidate(item: Record<string, unknown>, restaurant: Restauran
   const itemName = firstString(item, ["title", "name", "placeName"]);
   const itemAddress = firstString(item, ["address", "street", "fullAddress"]);
   const itemPhone = firstString(item, ["phone", "phoneNumber", "claimThisBusinessPhone"]);
-  const itemWebsite = firstString(item, ["website", "url", "websiteUrl"]);
+  const itemWebsite = firstWebsite(item);
 
   if (restaurant.gbpConnection?.placeId && itemPlaceId === restaurant.gbpConnection.placeId) score += 100;
   if (looseMatch(itemName, restaurant.name)) score += 40;
@@ -144,7 +166,12 @@ export async function collectGoogleMapsData(restaurant: RestaurantSeoContext) {
   const result = await runActor<Record<string, unknown>>(
     env.APIFY_ACTOR_GMAPS,
     input,
-    { timeoutMs: 120_000 }
+    {
+      timeoutMs: 120_000,
+      maxItems: input.maxCrawledPlacesPerSearch,
+      maxTotalChargeUsd: 0.12,
+      memoryMbytes: 4096,
+    }
   );
   const item = pickMapsItem(result.items, restaurant) ?? {};
   const imageUrls = item.imageUrls ?? item.images ?? item.photos;
@@ -157,12 +184,15 @@ export async function collectGoogleMapsData(restaurant: RestaurantSeoContext) {
     name: firstString(item, ["title", "name", "placeName"]),
     address: firstString(item, ["address", "street", "fullAddress"]),
     phone: firstString(item, ["phone", "phoneNumber", "claimThisBusinessPhone"]),
-    website: firstString(item, ["website", "url", "websiteUrl"]),
+    website: firstWebsite(item),
     hours: item.openingHours ?? item.hours ?? item.openingHoursTable ?? null,
     categories: normalizeCategories(item),
     photosCount: Array.isArray(imageUrls)
       ? imageUrls.length
       : firstNumber(item, ["imagesCount", "photosCount"]) ?? 0,
+    photoUrls: Array.isArray(imageUrls)
+      ? imageUrls.filter((url): url is string => typeof url === "string" && Boolean(url.trim())).slice(0, 30)
+      : [],
     rating: firstNumber(item, ["totalScore", "rating", "stars"]),
     reviewCount: firstNumber(item, ["reviewsCount", "reviewCount", "numberOfReviews"]),
     latitude: firstNumber(item, ["lat", "latitude"]) ?? nestedNumber(item, "location", "lat"),
@@ -187,11 +217,17 @@ export async function collectGoogleReviewsData(restaurant: RestaurantSeoContext)
   const result = await runActor<Record<string, unknown>>(
     env.APIFY_ACTOR_GMAPS_REVIEWS,
     buildReviewsInput(restaurant),
-    { timeoutMs: 300_000 }
+    {
+      timeoutMs: 300_000,
+      maxItems: 60,
+      maxTotalChargeUsd: 0.12,
+      memoryMbytes: 4096,
+    }
   );
   const reviews = result.items
     .map(normalizeReview)
-    .filter((review) => review.text || review.rating !== null);
+    .filter((review) => review.text || review.rating !== null)
+    .slice(0, 50);
   const reviewsWithRating = reviews.filter((review) => review.rating !== null);
   const reviewsWithOwnerResponse = reviews.filter((review) => review.ownerResponse);
   const averageRating = reviewsWithRating.length

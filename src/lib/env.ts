@@ -4,12 +4,18 @@ import { z } from "zod";
 const optionalString = (schema: z.ZodString = z.string()) =>
   z.preprocess((value) => (value === "" ? undefined : value), schema.optional());
 
+const isTestEnv =
+  process.env.NODE_ENV === "test" || process.env.npm_lifecycle_event === "test";
+
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   PORT: z.coerce.number().default(3001),
   ANTHROPIC_API_KEY: optionalString(),
   GEMINI_API_KEY: optionalString(),
   GOOGLE_API_KEY: optionalString(),
+  IP_HASH_PEPPER: isTestEnv
+    ? z.string().min(16).default("test-only-ip-hash-pepper")
+    : z.string().min(16),
   GOOGLE_IMAGE_MODEL: z.string().default("gemini-3-pro-image-preview"),
   GOOGLE_IMAGE_ALLOW_FALLBACK: z.coerce.boolean().default(false),
   GOOGLE_IMAGE_FALLBACK_MODEL: optionalString(),

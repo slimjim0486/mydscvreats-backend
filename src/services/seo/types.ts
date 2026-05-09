@@ -40,6 +40,7 @@ export interface GbpData {
   hours: unknown;
   categories: string[];
   photosCount: number;
+  photoUrls?: string[];
   rating: number | null;
   reviewCount: number | null;
   latitude: number | null;

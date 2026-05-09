@@ -88,7 +88,13 @@ async function collectPlatform(
         : [[restaurant.name, restaurant.address ?? restaurant.location].filter(Boolean).join(" ")],
       maxItems: 1,
     },
-    { timeoutMs: 90_000, estimateCostUsd: 0.06 }
+    {
+      timeoutMs: 90_000,
+      estimateCostUsd: 0.06,
+      maxItems: 1,
+      maxTotalChargeUsd: 0.07,
+      memoryMbytes: 4096,
+    }
   );
 
   return {
