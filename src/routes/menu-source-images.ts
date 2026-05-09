@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { MenuSourceImageReviewStatus } from "@prisma/client";
+import sharp from "sharp";
 import { getRestaurantEntitlements } from "@/lib/entitlements";
 import {
   getNextHiddenImageSlot,
@@ -34,15 +35,23 @@ const createCandidateSchema = z.object({
 });
 
 const cropUpdateSchema = z.object({
-  filename: z.string().min(1),
-  contentType: z.string().startsWith("image/"),
-  base64: z.string().min(1),
+  filename: z.string().min(1).optional(),
+  contentType: z.string().startsWith("image/").optional(),
+  base64: z.string().min(1).optional(),
   cropX: z.number().min(0).max(1),
   cropY: z.number().min(0).max(1),
   cropWidth: z.number().min(0.05).max(1),
   cropHeight: z.number().min(0.05).max(1),
   textOverlapScore: z.number().min(0).max(1).optional(),
-});
+}).refine(
+  (crop) =>
+    crop.base64
+      ? Boolean(crop.filename && crop.contentType)
+      : !crop.filename && !crop.contentType,
+  {
+    message: "Crop uploads must include filename, contentType, and base64 together",
+  }
+);
 
 const updateCandidateSchema = z.object({
   assignedMenuItemId: z.string().cuid().nullable().optional(),
@@ -103,6 +112,84 @@ async function getOwnedCandidate(candidateId: string, clerkId: string) {
   }
 
   return candidate;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function getPaddedCrop(crop: z.infer<typeof cropUpdateSchema>) {
+  const paddingX = crop.cropWidth * 0.04;
+  const paddingY = crop.cropHeight * 0.04;
+  const x = clamp(crop.cropX - paddingX, 0, 1);
+  const y = clamp(crop.cropY - paddingY, 0, 1);
+
+  return {
+    x,
+    y,
+    width: clamp(crop.cropWidth + paddingX * 2, 0.01, 1 - x),
+    height: clamp(crop.cropHeight + paddingY * 2, 0.01, 1 - y),
+  };
+}
+
+async function downloadImageBuffer(imageUrl: string) {
+  const response = await fetch(imageUrl);
+  if (!response.ok) {
+    throw new ApiError(`Failed to download source image (${response.status})`, 502);
+  }
+
+  return Buffer.from(await response.arrayBuffer());
+}
+
+async function uploadUpdatedCandidateCrop(
+  candidate: Awaited<ReturnType<typeof getOwnedCandidate>>,
+  crop: z.infer<typeof cropUpdateSchema>
+) {
+  if (crop.base64 && crop.filename && crop.contentType) {
+    return uploadBuffer({
+      buffer: Buffer.from(crop.base64, "base64"),
+      contentType: crop.contentType,
+      folder: `restaurants/${candidate.restaurantId}/menu-source-candidates`,
+      key: `restaurants/${candidate.restaurantId}/menu-source-candidates/${Date.now()}-${crop.filename.replace(/[^a-zA-Z0-9._-]/g, "-")}`,
+    });
+  }
+
+  if (!candidate.sourcePageImageUrl) {
+    throw new ApiError("This imported menu photo is missing its source page image.", 400);
+  }
+
+  const sourceBuffer = await downloadImageBuffer(candidate.sourcePageImageUrl);
+  const image = sharp(sourceBuffer).rotate();
+  const metadata = await image.metadata();
+
+  if (!metadata.width || !metadata.height) {
+    throw new ApiError("Could not read source page image dimensions.", 502);
+  }
+
+  const padded = getPaddedCrop(crop);
+  const left = clamp(Math.round(padded.x * metadata.width), 0, metadata.width - 1);
+  const top = clamp(Math.round(padded.y * metadata.height), 0, metadata.height - 1);
+  const width = Math.max(
+    1,
+    Math.min(metadata.width - left, Math.round(padded.width * metadata.width))
+  );
+  const height = Math.max(
+    1,
+    Math.min(metadata.height - top, Math.round(padded.height * metadata.height))
+  );
+
+  const cropped = await sharp(sourceBuffer)
+    .rotate()
+    .extract({ left, top, width, height })
+    .jpeg({ quality: 90 })
+    .toBuffer();
+
+  return uploadBuffer({
+    buffer: cropped,
+    contentType: "image/jpeg",
+    folder: `restaurants/${candidate.restaurantId}/menu-source-candidates`,
+    key: `restaurants/${candidate.restaurantId}/menu-source-candidates/${Date.now()}-menu-source-adjusted-${candidate.id}.jpg`,
+  });
 }
 
 async function confirmCandidateById(candidateId: string, clerkId: string) {
@@ -334,14 +421,7 @@ export const menuSourceImagesRoute = new Hono<{
             : {}),
           ...(data.crop
             ? {
-                imageUrl: (
-                  await uploadBuffer({
-                    buffer: Buffer.from(data.crop.base64, "base64"),
-                    contentType: data.crop.contentType,
-                    folder: `restaurants/${candidate.restaurantId}/menu-source-candidates`,
-                    key: `restaurants/${candidate.restaurantId}/menu-source-candidates/${Date.now()}-${data.crop.filename.replace(/[^a-zA-Z0-9._-]/g, "-")}`,
-                  })
-                ).url,
+                imageUrl: (await uploadUpdatedCandidateCrop(candidate, data.crop)).url,
                 cropX: data.crop.cropX,
                 cropY: data.crop.cropY,
                 cropWidth: data.crop.cropWidth,
