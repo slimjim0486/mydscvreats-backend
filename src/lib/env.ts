@@ -45,6 +45,15 @@ const envSchema = z.object({
   META_APP_ID: optionalString(),
   META_APP_SECRET: optionalString(),
   META_WHATSAPP_CONFIG_ID: optionalString(),
+  /** OAuth config-id for Meta Ads access (separate from the WhatsApp Embedded Signup id) */
+  META_ADS_CONFIG_ID: optionalString(),
+  /** Encryption key for stored Meta Marketing API tokens. Distinct from WhatsApp's
+   *  so a single key compromise doesn't cross integrations. */
+  META_ADS_TOKEN_ENCRYPTION_KEY: optionalString(z.string().min(32)),
+  /** Beta allowlist for Meta OAuth during dev-mode period (pre-Tech Provider).
+   *  Comma-separated restaurant IDs. Anyone not in this list sees waitlist copy
+   *  instead of a Connect button so they don't hit Meta's "app not available". */
+  AD_STUDIO_META_BETA_RESTAURANT_IDS: optionalString(),
   META_GRAPH_API_VERSION: z.string().default("v24.0"),
   STRIPE_STARTER_PRICE_ID: optionalString(),
   STRIPE_PRO_PRICE_ID: optionalString(),
@@ -53,6 +62,22 @@ const envSchema = z.object({
   RESEND_API_KEY: optionalString(),
   RESEND_FROM_EMAIL: optionalString(z.string().email()),
   FRONTEND_APP_URL: z.string().url().default("http://localhost:3000"),
+  // Ad Studio cost guardrails. Three separate per-restaurant pools so regen
+  // doesn't eat full-project quota; export DoS is bounded; all contribute
+  // to the global USD ceiling.
+  AD_STUDIO_GENERATE_PER_DAY: z.coerce.number().int().positive().default(20),
+  AD_STUDIO_REGEN_IMAGE_PER_DAY: z.coerce.number().int().positive().default(15),
+  AD_STUDIO_EXPORT_PER_DAY: z.coerce.number().int().positive().default(10),
+  AD_STUDIO_EXPORT_PER_HOUR: z.coerce.number().int().positive().default(3),
+  AD_STUDIO_GLOBAL_USD_PER_DAY: z.coerce.number().nonnegative().default(50),
+  // Phase 3A H2: WhatsApp Business messaging-tier daily cap (per-WABA).
+  // Meta's tiers: 250 (initial) → 1k → 10k → 100k → unlimited. We default
+  // to 1k since most newly-onboarded restaurants are at that tier; Phase
+  // 3B P4 will surface the real value from the Graph API quality check.
+  WHATSAPP_DAILY_TIER_LIMIT: z.coerce.number().int().positive().default(1000),
+  // Per-(customer,template) frequency cap window in hours. A given recipient
+  // cannot receive the same template more than once in this window.
+  WHATSAPP_FREQUENCY_CAP_HOURS: z.coerce.number().int().positive().default(24),
 });
 
 export const env = envSchema.parse(process.env);

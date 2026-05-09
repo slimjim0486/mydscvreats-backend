@@ -149,9 +149,13 @@ export function encryptAccessToken(token: string) {
 }
 
 export function decryptAccessToken(cipherText: string) {
+  // H3 fix: don't return 500 with "Stored WhatsApp token is invalid" — it
+  // confirms cipher format and gives a side-channel signal for key rotation.
+  // Caller maps this to a sanitized 503 + flips integration to a needs-
+  // reconnect state.
   const [version, ivValue, tagValue, encryptedValue] = cipherText.split(":");
   if (version !== "v1" || !ivValue || !tagValue || !encryptedValue) {
-    throw new ApiError("Stored WhatsApp token is invalid.", 500);
+    throw new ApiError("WhatsApp temporarily unavailable.", 503);
   }
 
   const decipher = crypto.createDecipheriv(
@@ -179,6 +183,37 @@ export function normalizeWhatsAppPhone(value: string) {
   return `+${digits}`;
 }
 
+/**
+ * H6 fix: SINGLE canonical phone normalizer used by every entry point —
+ * webhook ingest, public cart checkout, dashboard PATCH. Previously the
+ * webhook stored `+9715…` and the cart stored `9715…`, so the same diner
+ * who texted the restaurant and later ordered via the menu page would
+ * become two `Customer` rows. STOP on one row didn't suppress the other.
+ *
+ * Output: E.164 with `+` prefix. Defaults to UAE (971) for 9-digit local
+ * numbers. Returns null for unrecoverable input.
+ */
+export function normalizeE164Phone(value: string | null | undefined, defaultCountry = "971"): string | null {
+  if (!value) return null;
+  let digits = value.replace(/\D/g, "");
+  if (!digits) return null;
+
+  // Strip a leading 00 (international dialing prefix used in MENA: 0097150...).
+  if (digits.startsWith("00")) digits = digits.slice(2);
+
+  // 10-digit UAE local with leading 0 → strip the 0 and prefix country code.
+  if (digits.length === 10 && digits.startsWith("0")) {
+    digits = `${defaultCountry}${digits.slice(1)}`;
+  } else if (digits.length === 9 && !digits.startsWith(defaultCountry)) {
+    // Bare 9-digit subscriber number → assume default country.
+    digits = `${defaultCountry}${digits}`;
+  }
+
+  // E.164 sanity: 8-15 digits total.
+  if (digits.length < 8 || digits.length > 15) return null;
+  return `+${digits}`;
+}
+
 export function getEmbeddedSignupConfig() {
   return {
     available: Boolean(env.META_APP_ID && env.META_WHATSAPP_CONFIG_ID && env.META_APP_SECRET),
@@ -189,8 +224,11 @@ export function getEmbeddedSignupConfig() {
 }
 
 export function verifyMetaSignature(rawBody: string, signature: string | undefined | null) {
+  // C1 fix: fail closed when secret unset. A missing secret on a redeploy
+  // previously meant every webhook was accepted — the source of forged
+  // inbound messages, status events, opt-in/opt-out commands.
   if (!env.META_APP_SECRET) {
-    return true;
+    return false;
   }
 
   if (!signature?.startsWith("sha256=")) {
@@ -201,9 +239,24 @@ export function verifyMetaSignature(rawBody: string, signature: string | undefin
     .createHmac("sha256", env.META_APP_SECRET)
     .update(rawBody)
     .digest("hex");
-  const received = signature.replace("sha256=", "");
+  const received = signature.slice("sha256=".length);
 
-  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(received));
+  // C2 fix: timingSafeEqual throws RangeError on length mismatch — that
+  // bubbles to a 500 which Meta interprets as transient and retries with
+  // backoff. We need a constant-time compare that fails fast on mismatch
+  // and surfaces 403, not 500. Compare as raw bytes (32) not utf8 chars.
+  let expectedBuf: Buffer;
+  let receivedBuf: Buffer;
+  try {
+    expectedBuf = Buffer.from(expected, "hex");
+    receivedBuf = Buffer.from(received, "hex");
+  } catch {
+    return false;
+  }
+  if (expectedBuf.length === 0 || expectedBuf.length !== receivedBuf.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(expectedBuf, receivedBuf);
 }
 
 async function graphRequest<T>(
@@ -250,6 +303,30 @@ export async function exchangeEmbeddedSignupCode(code: string) {
   }
 
   return payload.access_token as string;
+}
+
+/**
+ * Phase 3A C-1 fix: resolve the Meta `user_id` for a freshly-issued access
+ * token. We need this to honour the data-deletion / deauthorize callbacks
+ * — Meta sends `signed_request.user_id` and we must be able to fan-out
+ * the erase across every integration owned by that user. Returns null on
+ * failure so a transient `/me` outage doesn't block the connect flow;
+ * the deletion route degrades to a no-op for un-tagged rows, which is
+ * recoverable on the next reconnect.
+ */
+export async function fetchMetaUserId(accessToken: string): Promise<string | null> {
+  try {
+    const response = await fetch(`${GRAPH_BASE}/me?fields=id&access_token=${encodeURIComponent(accessToken)}`);
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || typeof payload?.id !== "string") {
+      console.warn("[fetchMetaUserId] /me returned no id", payload?.error?.message);
+      return null;
+    }
+    return payload.id;
+  } catch (error) {
+    console.warn("[fetchMetaUserId] /me call failed", error);
+    return null;
+  }
 }
 
 export async function fetchWhatsAppPhoneNumber(input: {

@@ -4,6 +4,9 @@ import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { env } from "@/lib/env";
 import { startMenuImageWorker } from "@/queue/image-generation";
+import { startAdStudioWorker } from "@/queue/ad-studio-jobs";
+import { startWhatsAppRetentionWorker } from "@/queue/whatsapp-retention";
+import { adStudioRoute, adStudioPublicRoute } from "@/routes/ad-studio";
 import { analyticsRoute } from "@/routes/analytics";
 import { auditRoute } from "@/routes/audit";
 import { aiRoute } from "@/routes/ai";
@@ -26,6 +29,7 @@ import { ownerChatRoute } from "@/routes/owner-chat";
 import { menuPrintRoute, pdfExportRoute } from "@/routes/pdf-export";
 import { whatsappRoute } from "@/routes/whatsapp";
 import { whatsappWebhooksRoute } from "@/routes/whatsapp-webhooks";
+import { metaDataDeletionRoute } from "@/routes/meta-data-deletion";
 import { clerkWebhooksRoute } from "@/routes/clerk-webhooks";
 
 const app = new Hono();
@@ -60,11 +64,14 @@ app.route("/api/audit", auditRoute);
 app.route("/api/upload", uploadRoute);
 app.route("/api/whatsapp", whatsappRoute);
 app.route("/api/webhooks", whatsappWebhooksRoute);
+app.route("/api/webhooks", metaDataDeletionRoute);
 app.route("/api/webhooks/clerk", clerkWebhooksRoute);
 app.route("/api/gbp", gbpRoute);
 app.route("/api/seo", seoRoute);
 app.route("/api/menu-print", menuPrintRoute);
 app.route("/api/pdf-export", pdfExportRoute);
+app.route("/api/ad-studio-public", adStudioPublicRoute);
+app.route("/api/ad-studio", adStudioRoute);
 
 serve(
   {
@@ -83,4 +90,20 @@ startMenuImageWorker()
   })
   .catch((error) => {
     console.error("pg-boss worker failed to start", error);
+  });
+
+startAdStudioWorker()
+  .then(() => {
+    console.log("pg-boss ad-studio worker started");
+  })
+  .catch((error) => {
+    console.error("pg-boss ad-studio worker failed to start", error);
+  });
+
+startWhatsAppRetentionWorker()
+  .then(() => {
+    console.log("pg-boss whatsapp-retention worker started");
+  })
+  .catch((error) => {
+    console.error("pg-boss whatsapp-retention worker failed to start", error);
   });

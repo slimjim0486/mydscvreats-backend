@@ -1,5 +1,6 @@
 import { ApiError, isApiError } from "@/lib/errors";
 import type { Context } from "hono";
+import { ZodError } from "zod";
 
 export function getPagination(searchParams: URLSearchParams) {
   const page = Number(searchParams.get("page") ?? "1");
@@ -29,6 +30,27 @@ export function errorResponse(c: Context, error: unknown) {
     );
   }
 
-  console.error(error);
+  // H3 fix: ZodError needs an explicit branch — otherwise it falls into
+  // the generic 500 path and the user sees "Internal server error" for
+  // what is really a schema mismatch. Format the issues into a 400 so
+  // the dashboard can surface "phoneNumber: Required" instead of bouncing
+  // through Sentry.
+  if (error instanceof ZodError) {
+    return c.json(
+      {
+        error: "Invalid request",
+        details: error.issues.map((issue) => ({
+          path: issue.path.join("."),
+          message: issue.message,
+        })),
+      },
+      400
+    );
+  }
+
+  // Anything else is unexpected. Log the full error server-side, but
+  // return a generic message — Postgres errors, stack traces, and
+  // internal env paths must never leak to the client.
+  console.error("[errorResponse] unhandled", error);
   return c.json({ error: "Internal server error" }, 500);
 }

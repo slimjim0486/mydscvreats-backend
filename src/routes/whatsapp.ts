@@ -10,6 +10,7 @@ import {
   consumeRateLimit,
   getClientIp,
 } from "@/lib/public-request-guards";
+import { normalizeE164Phone } from "@/lib/whatsapp-business";
 
 const redirectQuerySchema = z.object({
   source: z
@@ -54,16 +55,16 @@ const cartRedirectSchema = z.object({
     .optional(),
 });
 
+/**
+ * Digits-only output for building wa.me URLs (which require no `+`).
+ * Distinct from `normalizeE164Phone` which is the canonical Customer.
+ * normalizedPhone format used by the webhook ingest.
+ */
 function normalizeWhatsappNumber(value: string | null | undefined) {
   if (!value) {
     return null;
   }
 
-  const digitsOnly = value.replace(/\D/g, "");
-  return digitsOnly.length >= 8 ? digitsOnly : null;
-}
-
-function normalizeCustomerPhone(value: string) {
   const digitsOnly = value.replace(/\D/g, "");
   return digitsOnly.length >= 8 ? digitsOnly : null;
 }
@@ -407,8 +408,11 @@ export const whatsappRoute = new Hono()
       try {
         await prisma.$transaction(async (tx) => {
           let customerId: string | null = null;
+          // H6 fix: use canonical E.164 (`+9715…`) — same format the webhook
+          // path uses, so a diner who messages the restaurant AND orders
+          // via the menu page is one Customer row, not two.
           const normalizedCustomerPhone = payload.customer
-            ? normalizeCustomerPhone(payload.customer.phoneNumber)
+            ? normalizeE164Phone(payload.customer.phoneNumber)
             : null;
 
           if (payload.customer && normalizedCustomerPhone) {
@@ -427,7 +431,11 @@ export const whatsappRoute = new Hono()
                 displayName: payload.customer.name,
                 marketingOptIn: payload.customer.marketingConsent,
                 marketingOptInAt: payload.customer.marketingConsent ? capturedAt : null,
-                marketingOptOutAt: payload.customer.marketingConsent ? null : capturedAt,
+                // M6 fix: only write opt_out timestamp when transitioning from
+                // a prior opt_in. First-time customers who decline are
+                // "never_asked", not "opt_out" — preserves the dashboard's
+                // ability to legitimately re-opt-in later.
+                marketingOptOutAt: null,
                 lastOrderAt: capturedAt,
                 orderCount: 1,
                 totalSpend: totalPrice,
@@ -438,7 +446,10 @@ export const whatsappRoute = new Hono()
                 displayName: payload.customer.name,
                 marketingOptIn: payload.customer.marketingConsent,
                 marketingOptInAt: payload.customer.marketingConsent ? capturedAt : undefined,
-                marketingOptOutAt: payload.customer.marketingConsent ? null : capturedAt,
+                // M6 fix: only flip to opt_out timestamp when this update is
+                // a transition from a prior consent state — let webhook STOP
+                // events be the source of truth for opt-out.
+                marketingOptOutAt: payload.customer.marketingConsent ? null : undefined,
                 lastOrderAt: capturedAt,
                 orderCount: {
                   increment: 1,

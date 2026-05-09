@@ -4,10 +4,44 @@ import {
   extractWebhookMessageBody,
   mapWebhookMessageType,
   mapWebhookStatus,
+  normalizeE164Phone,
   normalizeWhatsAppPhone,
   verifyMetaSignature,
 } from "@/lib/whatsapp-business";
 import { prisma } from "@/lib/prisma";
+
+/**
+ * H7 fix: cap webhook-supplied display names to prevent stored-XSS surfaces
+ * (email subject lines, future plaintext exports). React's auto-escape
+ * covers the dashboard render, but every other downstream surface needs
+ * explicit truncation + control-char strip.
+ */
+function sanitizeDisplayName(value: string | null | undefined, fallback: string): string {
+  if (!value) return fallback;
+  // Strip C0/C1 control chars, zero-width, RTL/LTR overrides, bidi
+  // isolates (FSI/PDI/LRI/RLI), and BOM. Explicit \u escapes so the
+  // rule survives editor / encoding round-trips.
+  const stripped = value.replace(
+    /[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g,
+    ""
+  );
+  return stripped.trim().slice(0, 120) || fallback;
+}
+
+/**
+ * M3 fix: WhatsApp message status events can arrive out-of-order. Status
+ * should monotonically advance: queued → sent → delivered → read; failed
+ * is terminal. Without rank enforcement, a `delivered` arriving after
+ * `read` overwrites the read timestamp.
+ */
+const STATUS_RANK: Record<string, number> = {
+  received: 0,
+  queued: 0,
+  sent: 1,
+  delivered: 2,
+  read: 3,
+  failed: 99,
+};
 
 function toWebhookDate(timestamp: unknown) {
   const seconds = Number(timestamp);
@@ -54,14 +88,16 @@ async function handleInboundMessage(input: {
   message: Record<string, any>;
   contactName: string | null;
 }) {
-  const fromPhone = normalizeWhatsAppPhone(String(input.message.from ?? ""));
+  // H6 fix: use the canonical E.164 normalizer so this matches what the
+  // public cart path stores.
+  const fromPhone = normalizeE164Phone(String(input.message.from ?? ""));
   if (!fromPhone || !input.message.id) {
     return;
   }
 
   const body = extractWebhookMessageBody(input.message);
   const occurredAt = toWebhookDate(input.message.timestamp);
-  const displayName = input.contactName ?? fromPhone;
+  const displayName = sanitizeDisplayName(input.contactName, fromPhone);
   const consentCommand = getWhatsAppConsentCommand(body);
 
   await prisma.$transaction(async (tx) => {
@@ -192,20 +228,28 @@ async function handleStatus(input: {
       },
       select: {
         id: true,
+        status: true,
       },
     });
 
     if (message) {
-      await tx.whatsAppMessage.update({
-        where: {
-          id: message.id,
-        },
-        data: {
-          status,
-          ...timestamps,
-          rawPayload: input.status,
-        },
-      });
+      // M3 fix: status must monotonically advance. Skip an out-of-order
+      // status event (e.g. `delivered` arriving after `read`) to preserve
+      // the higher-rank state already recorded.
+      const currentRank = STATUS_RANK[message.status as string] ?? 0;
+      const newRank = STATUS_RANK[status] ?? 0;
+      if (newRank > currentRank || status === "failed") {
+        await tx.whatsAppMessage.update({
+          where: {
+            id: message.id,
+          },
+          data: {
+            status,
+            ...timestamps,
+            rawPayload: input.status,
+          },
+        });
+      }
     }
 
     await tx.messageLog
@@ -222,22 +266,36 @@ async function handleStatus(input: {
       })
       .catch(() => null);
 
-    await tx.whatsAppMessageStatusEvent.create({
-      data: {
-        restaurantId: input.integration.restaurantId,
-        integrationId: input.integration.id,
-        messageId: message?.id ?? null,
+    // M4: idempotent status events — same (providerMessageId, status,
+    // occurredAt) tuple from a Meta retry should not duplicate. We don't
+    // have a unique constraint yet (would need migration), so use upsert
+    // semantics via a defensive findFirst+create.
+    const existing = await tx.whatsAppMessageStatusEvent.findFirst({
+      where: {
         providerMessageId,
         status,
-        recipientPhone: input.status.recipient_id
-          ? normalizeWhatsAppPhone(String(input.status.recipient_id))
-          : null,
-        errorCode,
-        errorMessage,
-        rawPayload: input.status,
         occurredAt,
       },
+      select: { id: true },
     });
+    if (!existing) {
+      await tx.whatsAppMessageStatusEvent.create({
+        data: {
+          restaurantId: input.integration.restaurantId,
+          integrationId: input.integration.id,
+          messageId: message?.id ?? null,
+          providerMessageId,
+          status,
+          recipientPhone: input.status.recipient_id
+            ? normalizeE164Phone(String(input.status.recipient_id))
+            : null,
+          errorCode,
+          errorMessage,
+          rawPayload: input.status,
+          occurredAt,
+        },
+      });
+    }
   });
 }
 
@@ -261,11 +319,25 @@ export const whatsappWebhooksRoute = new Hono()
   .post("/meta/whatsapp", async (c) => {
     const rawBody = await c.req.text();
 
+    // H1 fix: cap body size. Meta payloads are <50KB; anything bigger is
+    // either malformed or a DoS attempt. 1MB is generous.
+    const MAX_BODY_BYTES = 1_000_000;
+    if (rawBody.length > MAX_BODY_BYTES) {
+      return c.text("Payload too large", 413);
+    }
+
     if (!verifyMetaSignature(rawBody, c.req.header("x-hub-signature-256"))) {
       return c.text("Invalid signature", 403);
     }
 
-    const payload = JSON.parse(rawBody) as Record<string, any>;
+    // H1 fix: guard JSON.parse — malformed body bombs to 500, Meta interprets
+    // 5xx as transient and retries with exponential backoff (storm).
+    let payload: Record<string, any>;
+    try {
+      payload = JSON.parse(rawBody) as Record<string, any>;
+    } catch {
+      return c.text("Bad request", 400);
+    }
     const entries = Array.isArray(payload.entry) ? payload.entry : [];
 
     for (const entry of entries) {

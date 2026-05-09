@@ -35,6 +35,10 @@ export interface PlanEntitlements {
   qrCodeGeneratorEnabled: boolean;
   timeLimitedSpecialsEnabled: boolean;
   soldOutToggleEnabled: boolean;
+  // Ad Creative Studio (Phase 1)
+  adStudioEnabled: boolean;
+  adProjectsPerMonth: number | null;
+  adGenerationsPerProject: number;
 }
 
 const PLAN_ENTITLEMENTS: Record<
@@ -69,6 +73,9 @@ const PLAN_ENTITLEMENTS: Record<
     qrCodeGeneratorEnabled: false,
     timeLimitedSpecialsEnabled: false,
     soldOutToggleEnabled: false,
+    adStudioEnabled: false,
+    adProjectsPerMonth: 0,
+    adGenerationsPerProject: 0,
   },
   pro: {
     menuItemLimit: null,
@@ -98,6 +105,9 @@ const PLAN_ENTITLEMENTS: Record<
     qrCodeGeneratorEnabled: false,
     timeLimitedSpecialsEnabled: false,
     soldOutToggleEnabled: false,
+    adStudioEnabled: true,
+    adProjectsPerMonth: null, // unlimited
+    adGenerationsPerProject: 6,
   },
   portfolio: {
     menuItemLimit: null,
@@ -127,6 +137,9 @@ const PLAN_ENTITLEMENTS: Record<
     qrCodeGeneratorEnabled: true,
     timeLimitedSpecialsEnabled: true,
     soldOutToggleEnabled: true,
+    adStudioEnabled: true,
+    adProjectsPerMonth: null,
+    adGenerationsPerProject: 6,
   },
 };
 
@@ -160,6 +173,9 @@ const DRAFT_ENTITLEMENTS: PlanEntitlements = {
   qrCodeGeneratorEnabled: false,
   timeLimitedSpecialsEnabled: false,
   soldOutToggleEnabled: false,
+  adStudioEnabled: false,
+  adProjectsPerMonth: 0,
+  adGenerationsPerProject: 0,
 };
 
 type RestaurantPlanSource =
@@ -223,7 +239,12 @@ function getPendingPortfolioEntitlements(): PlanEntitlements {
     qrCodeGeneratorEnabled: false,
     timeLimitedSpecialsEnabled: false,
     soldOutToggleEnabled: false,
+    // Inherit ad studio from Pro
   };
+}
+
+export function getAdStudioUpgradeMessage() {
+  return "The Ad Creative Studio is available on Pro. Upgrade to generate ads from your menu in minutes.";
 }
 
 export function getPlanEntitlements(plan: SubscriptionPlan): PlanEntitlements {

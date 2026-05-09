@@ -1,0 +1,1312 @@
+// Ad Creative Studio routes (Phase 1).
+// All endpoints require auth. Project endpoints enforce tenant isolation via
+// resolveRestaurantForUser + entitlement check (adStudioEnabled).
+
+import { Hono, type Context } from "hono";
+import { z } from "zod";
+import { Prisma } from "@prisma/client";
+import { ApiError } from "@/lib/errors";
+import { errorResponse } from "@/lib/http";
+import { getRestaurantEntitlements, getAdStudioUpgradeMessage } from "@/lib/entitlements";
+import { prisma } from "@/lib/prisma";
+import { requireAuth } from "@/middleware/auth";
+import {
+  campaignArchetypes,
+  calendarMoments,
+  creativeArchetypes,
+  hookTemplates,
+  ctaPatterns,
+  countryRules,
+  audienceRecipes,
+  type CountryCode,
+} from "@/services/ad-studio";
+import {
+  briefInputSchema,
+  validateBudgetTierAgainstCampaign,
+  getRecommendedPlatformsForCountries,
+  type BriefInput,
+} from "@/services/ad-studio-ai";
+import { randomBytes } from "node:crypto";
+import { enqueueAdStudioGeneration, enqueueRegenImage } from "@/queue/ad-studio-jobs";
+import { buildAndUploadBundle } from "@/services/ad-studio-ai/export-bundle";
+import { buildMetaExport } from "@/services/ad-studio-meta-export";
+import {
+  deriveMetrics,
+  summarizeCampaignInsights,
+} from "@/services/ad-studio-insights/insights-engine";
+import {
+  buildAuthorizeUrl,
+  exchangeCodeForShortLivedToken,
+  exchangeForLongLivedToken,
+  fetchAdsMetaUserId,
+  fetchGrantedScopes,
+  encryptMetaAdsToken,
+  decryptMetaAdsToken,
+  getTokenLastFour,
+  listAdAccounts,
+  syncLiveCampaignFromMeta,
+} from "@/services/meta-ads-oauth";
+import { env } from "@/lib/env";
+import { randomBytes as nodeRandomBytes } from "node:crypto";
+import {
+  enforceGenerateRateLimit,
+  enforceGlobalBudget,
+  enforceImageRegenRateLimit,
+  enforceExportRateLimit,
+  enforceReportMetricsRateLimit,
+  enforceLinkCampaignRateLimit,
+  enforceMetaApiRateLimit,
+} from "@/services/ad-studio-ai/guards";
+
+export const adStudioRoute = new Hono<{
+  Variables: { auth: { clerkId: string; email: string | null; fullName: string | null } };
+}>();
+adStudioRoute.use("*", requireAuth);
+
+// =============================================================================
+// Helpers
+// =============================================================================
+
+async function loadRestaurantForUser(restaurantId: string, clerkId: string) {
+  const restaurant = await prisma.restaurant.findFirst({
+    where: { id: restaurantId, owner: { clerkId } },
+    include: {
+      subscription: true,
+      operatorAccount: { include: { _count: { select: { brands: true } } } },
+    },
+  });
+  if (!restaurant) {
+    throw new ApiError("Restaurant not found", 404);
+  }
+  return restaurant;
+}
+
+async function loadProjectForUser(projectId: string, clerkId: string) {
+  const project = await prisma.adProject.findFirst({
+    where: { id: projectId, restaurant: { owner: { clerkId } } },
+    include: {
+      restaurant: {
+        include: {
+          subscription: true,
+          operatorAccount: { include: { _count: { select: { brands: true } } } },
+        },
+      },
+      creatives: { orderBy: { variant: "asc" } },
+      exports: { orderBy: { createdAt: "desc" }, take: 1 },
+    },
+  });
+  if (!project) throw new ApiError("Project not found", 404);
+  return project;
+}
+
+function ensureAdStudioEnabled(restaurant: Parameters<typeof getRestaurantEntitlements>[0]) {
+  const ents = getRestaurantEntitlements(restaurant);
+  if (!ents.adStudioEnabled) {
+    throw new ApiError(getAdStudioUpgradeMessage(), 402);
+  }
+  return ents;
+}
+
+// =============================================================================
+// KB read endpoints — for the wizard pickers
+// =============================================================================
+
+adStudioRoute.get("/kb/campaigns", async (c) => {
+  return c.json({
+    campaigns: campaignArchetypes.map((a) => ({
+      id: a.id,
+      name: a.name,
+      goal: a.goal,
+      duration: a.duration,
+      budgetTiers: a.budgetTiers,
+      platformMix: a.platformMix,
+      benchmarks: a.benchmarks,
+    })),
+  });
+});
+
+adStudioRoute.get("/kb/archetypes", async (c) => {
+  return c.json({
+    archetypes: creativeArchetypes.map((a) => ({
+      id: a.id,
+      name: a.name,
+      why: a.why,
+      durationSec: a.durationSec,
+      bestPlatforms: a.bestPlatforms,
+      cuisineFits: a.cuisineFits,
+      funnelStages: a.funnelStages,
+    })),
+  });
+});
+
+adStudioRoute.get("/kb/calendar", async (c) => {
+  const country = c.req.query("country");
+  const moments = country
+    ? calendarMoments.filter((m) => m.countries.includes(country as CountryCode))
+    : calendarMoments;
+
+  return c.json({
+    moments: moments.map((m) => ({
+      id: m.id,
+      name: m.name,
+      kind: m.kind,
+      dates: m.dates,
+      countries: m.countries,
+      spendPulse: m.spendPulse,
+      creativeAngles: m.creativeAngles,
+    })),
+  });
+});
+
+adStudioRoute.get("/kb/recommend-platforms", async (c) => {
+  const countries = (c.req.query("countries") ?? "").split(",").filter(Boolean) as CountryCode[];
+  if (!countries.length) return c.json({ platforms: [] });
+  return c.json({ platforms: getRecommendedPlatformsForCountries(countries) });
+});
+
+// =============================================================================
+// Project CRUD
+// =============================================================================
+
+adStudioRoute.get("/projects", async (c) => {
+  try {
+    const auth = c.var.auth;
+    const restaurantId = c.req.query("restaurantId");
+    if (!restaurantId) throw new ApiError("restaurantId is required", 400);
+
+    const restaurant = await loadRestaurantForUser(restaurantId, auth.clerkId);
+    const ents = ensureAdStudioEnabled(restaurant);
+
+    const projects = await prisma.adProject.findMany({
+      where: { restaurantId: restaurant.id },
+      orderBy: { createdAt: "desc" },
+      include: {
+        creatives: { select: { id: true, variant: true, status: true, heroImageUrl: true }, orderBy: { variant: "asc" } },
+      },
+      take: 50,
+    });
+
+    return c.json({ projects, entitlements: ents });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+adStudioRoute.post("/projects", async (c) => {
+  try {
+    const auth = c.var.auth;
+    const body = await c.req.json();
+    const parsed = briefInputSchema.parse(body);
+
+    const restaurant = await loadRestaurantForUser(parsed.restaurantId, auth.clerkId);
+    const ents = ensureAdStudioEnabled(restaurant);
+
+    // Per-month quota check
+    if (ents.adProjectsPerMonth !== null) {
+      const monthStart = new Date();
+      monthStart.setDate(1);
+      monthStart.setHours(0, 0, 0, 0);
+      const created = await prisma.adProject.count({
+        where: { restaurantId: restaurant.id, createdAt: { gte: monthStart } },
+      });
+      if (created >= ents.adProjectsPerMonth) {
+        throw new ApiError(
+          `You've reached this month's limit of ${ents.adProjectsPerMonth} projects. Upgrade or wait until next month.`,
+          429
+        );
+      }
+    }
+
+    validateBudgetTierAgainstCampaign(parsed);
+
+    const project = await prisma.adProject.create({
+      data: {
+        restaurantId: restaurant.id,
+        name: parsed.name,
+        campaignType: parsed.campaignType,
+        goal: parsed.goal,
+        countries: parsed.countries,
+        cuisines: parsed.cuisines,
+        targetPlatforms: parsed.targetPlatforms,
+        budgetTier: parsed.budgetTier,
+        budgetAed: parsed.budgetAed,
+        durationWeeks: parsed.durationWeeks ?? null,
+        primaryDishId: parsed.primaryDishId ?? null,
+        brandVoice: parsed.brandVoice ?? null,
+        status: "draft",
+        briefJson: parsed as unknown as Prisma.InputJsonValue,
+      },
+    });
+
+    return c.json({ project }, 201);
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+adStudioRoute.get("/projects/:id", async (c) => {
+  try {
+    const auth = c.var.auth;
+    const project = await loadProjectForUser(c.req.param("id"), auth.clerkId);
+    return c.json({ project });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+adStudioRoute.delete("/projects/:id", async (c) => {
+  try {
+    const auth = c.var.auth;
+    const project = await loadProjectForUser(c.req.param("id"), auth.clerkId);
+    ensureAdStudioEnabled(project.restaurant);
+    await prisma.adProject.delete({ where: { id: project.id } });
+    return c.json({ ok: true });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+// =============================================================================
+// Generation kickoff
+// =============================================================================
+
+adStudioRoute.post("/projects/:id/generate", async (c) => {
+  try {
+    const auth = c.var.auth;
+    const project = await loadProjectForUser(c.req.param("id"), auth.clerkId);
+    const ents = ensureAdStudioEnabled(project.restaurant);
+
+    // Cost guardrails — per-restaurant per-day cap + global daily USD ceiling.
+    await enforceGlobalBudget();
+    await enforceGenerateRateLimit(project.restaurantId);
+
+    const numberOfVariants = Math.min(Math.max(ents.adGenerationsPerProject, 1), 6);
+
+    // Race-safe status flip: only enqueue if we successfully transitioned out of
+    // a non-generating state. updateMany returns count of matched rows.
+    const flipped = await prisma.adProject.updateMany({
+      where: { id: project.id, status: { not: "generating" } },
+      data: { status: "generating", lastError: null },
+    });
+    if (flipped.count === 0) {
+      throw new ApiError("Generation already in progress", 409);
+    }
+
+    await enqueueAdStudioGeneration({ projectId: project.id, numberOfVariants });
+
+    return c.json({ ok: true, jobEnqueued: true });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+// =============================================================================
+// Creative variant edit + regenerate-image
+// =============================================================================
+
+const variantEditSchema = z.object({
+  headline: z.string().min(1).max(200).optional(),
+  primaryText: z.string().min(1).max(500).optional(),
+  ctaText: z.string().min(1).max(80).optional(),
+  headlineAr: z.string().max(200).nullable().optional(),
+  primaryTextAr: z.string().max(500).nullable().optional(),
+  ctaTextAr: z.string().max(80).nullable().optional(),
+  isApproved: z.boolean().optional(),
+});
+
+adStudioRoute.patch("/creatives/:creativeId", async (c) => {
+  try {
+    const auth = c.var.auth;
+    const creativeId = c.req.param("creativeId");
+    const body = await c.req.json();
+    const parsed = variantEditSchema.parse(body);
+
+    // Tenant isolation: resolve creative → project → restaurant → owner
+    const creative = await prisma.adCreative.findUnique({
+      where: { id: creativeId },
+      include: { project: { include: { restaurant: { select: { ownerId: true } } } } },
+    });
+    if (!creative) throw new ApiError("Creative not found", 404);
+
+    const restaurantWithOwner = await prisma.restaurant.findFirst({
+      where: { id: creative.project.restaurantId, owner: { clerkId: auth.clerkId } },
+      include: {
+        subscription: true,
+        operatorAccount: { include: { _count: { select: { brands: true } } } },
+      },
+    });
+    if (!restaurantWithOwner) throw new ApiError("Creative not found", 404);
+    ensureAdStudioEnabled(restaurantWithOwner);
+
+    const updated = await prisma.adCreative.update({
+      where: { id: creativeId },
+      data: {
+        ...parsed,
+        isEdited: true,
+      },
+    });
+
+    return c.json({ creative: updated });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+// =============================================================================
+// Export
+// =============================================================================
+
+adStudioRoute.post("/projects/:id/export", async (c) => {
+  try {
+    const auth = c.var.auth;
+    const project = await loadProjectForUser(c.req.param("id"), auth.clerkId);
+    ensureAdStudioEnabled(project.restaurant);
+
+    if (project.status !== "ready" && project.status !== "exported") {
+      throw new ApiError("Project is not ready to export. Wait for generation to finish.", 409);
+    }
+
+    if (project.creatives.length === 0) {
+      throw new ApiError("Project has no creatives to export", 400);
+    }
+
+    const result = await buildAndUploadBundle({
+      projectId: project.id,
+      restaurantId: project.restaurantId,
+      restaurantName: project.restaurant.name,
+      projectName: project.name,
+      campaignType: project.campaignType,
+      countries: project.countries,
+      cuisines: project.cuisines,
+      targetPlatforms: project.targetPlatforms,
+      budgetAed: project.budgetAed,
+      variants: project.creatives.map((v) => ({
+        variant: v.variant,
+        archetypeId: v.archetypeId,
+        hookId: v.hookId,
+        ctaId: v.ctaId,
+        headline: v.headline,
+        primaryText: v.primaryText,
+        ctaText: v.ctaText,
+        headlineAr: v.headlineAr,
+        primaryTextAr: v.primaryTextAr,
+        ctaTextAr: v.ctaTextAr,
+        heroImageUrl: v.heroImageUrl,
+      })),
+    });
+
+    await prisma.adProject.update({
+      where: { id: project.id },
+      data: { status: "exported" },
+    });
+
+    return c.json({
+      ok: true,
+      signedUrl: result.signedUrl,
+      expiresAt: result.expiresAt,
+      fileSizeBytes: result.fileSizeBytes,
+    });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+// =============================================================================
+// Phase 2A — Meta-ready ZIP export
+// =============================================================================
+
+adStudioRoute.post("/projects/:id/export-meta", async (c) => {
+  try {
+    const auth = c.var.auth;
+    const project = await loadProjectForUser(c.req.param("id"), auth.clerkId);
+    ensureAdStudioEnabled(project.restaurant);
+
+    if (project.status !== "ready" && project.status !== "exported") {
+      throw new ApiError("Project is not ready to export. Wait for generation to finish.", 409);
+    }
+    if (project.creatives.length === 0) {
+      throw new ApiError("Project has no creatives to export", 400);
+    }
+
+    // Hourly + daily export rate-limit. Bundle exports are CPU/memory-intensive;
+    // a spam loop pins the container.
+    await enforceExportRateLimit(project.restaurantId);
+
+    // Destination URL: prefer a valid WhatsApp number → menu page → fallback.
+    // E.164: 8-15 digits after stripping. Anything outside that range is junk.
+    const restaurant = project.restaurant;
+    const waDigits = restaurant.whatsappNumber?.replace(/\D/g, "") ?? "";
+    const waValid = waDigits.length >= 8 && waDigits.length <= 15;
+    const destinationUrl =
+      (waValid ? `https://wa.me/${waDigits}` : null) ??
+      (restaurant.slug ? `https://getbustan.com/r/${restaurant.slug}` : null) ??
+      "";
+
+    const result = await buildMetaExport({
+      projectId: project.id,
+      restaurantId: project.restaurantId,
+      restaurantName: restaurant.name,
+      projectName: project.name,
+      campaignType: project.campaignType as never,
+      goal: project.goal as never,
+      countries: project.countries as never,
+      cuisines: project.cuisines,
+      budgetAed: project.budgetAed,
+      durationWeeks: project.durationWeeks,
+      destinationUrl,
+      pageNameHint: restaurant.name,
+      creatives: project.creatives.map((v) => ({
+        id: v.id,
+        variant: v.variant,
+        archetypeId: v.archetypeId,
+        hookId: v.hookId,
+        ctaId: v.ctaId,
+        headline: v.headline,
+        primaryText: v.primaryText,
+        ctaText: v.ctaText,
+        headlineAr: v.headlineAr,
+        primaryTextAr: v.primaryTextAr,
+        ctaTextAr: v.ctaTextAr,
+        heroImageUrl: v.heroImageUrl,
+      })),
+    });
+
+    await prisma.adProject.update({
+      where: { id: project.id },
+      data: { status: "exported" },
+    });
+
+    return c.json({
+      ok: true,
+      signedUrl: result.signedUrl,
+      expiresAt: result.expiresAt,
+      fileSizeBytes: result.fileSizeBytes,
+      validationIssues: result.validationIssues,
+    });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+// =============================================================================
+// Phase 2C — Meta OAuth autopilot
+// =============================================================================
+
+const PENDING_STATE_TTL_MIN = 10;
+
+function buildMetaCallbackUri(): string {
+  // Backend serves callback; frontend redirects there after OAuth.
+  // FRONTEND_APP_URL is the public origin (e.g. https://app.getbustan.com).
+  return `${env.FRONTEND_APP_URL.replace(/\/$/, "")}/dashboard/ad-studio/integrations/meta/callback`;
+}
+
+adStudioRoute.get("/integrations/meta/start", async (c) => {
+  try {
+    const auth = c.var.auth;
+    const restaurantId = c.req.query("restaurantId");
+    if (!restaurantId) throw new ApiError("restaurantId is required", 400);
+    const restaurant = await loadRestaurantForUser(restaurantId, auth.clerkId);
+    ensureAdStudioEnabled(restaurant);
+    if (!isMetaBetaRestaurant(restaurant.id)) {
+      throw new ApiError(
+        "Meta auto-sync is in early access. We'll notify you as soon as it's open.",
+        403
+      );
+    }
+    enforceMetaApiRateLimit(restaurant.id);
+
+    // M5 fix: idempotent within 60s. A double-click on Connect must NOT
+    // overwrite a fresh state — that would 400-out the callback that's
+    // already round-tripping through Meta.
+    const existing = await prisma.metaAdsIntegration.findUnique({
+      where: { restaurantId: restaurant.id },
+    });
+    const fresh =
+      existing?.pendingState &&
+      existing.pendingStateAt &&
+      Date.now() - existing.pendingStateAt.getTime() < 60_000;
+
+    let state: string;
+    if (fresh) {
+      state = existing!.pendingState!;
+    } else {
+      state = nodeRandomBytes(24).toString("base64url");
+      await prisma.metaAdsIntegration.upsert({
+        where: { restaurantId: restaurant.id },
+        create: {
+          restaurantId: restaurant.id,
+          status: "pending",
+          pendingState: state,
+          pendingStateAt: new Date(),
+        },
+        update: {
+          pendingState: state,
+          pendingStateAt: new Date(),
+          // Don't overwrite a connected token — only the callback flips
+          // status to "connected" and writes the new cipher.
+        },
+      });
+    }
+
+    const authorizeUrl = buildAuthorizeUrl({ state, redirectUri: buildMetaCallbackUri() });
+    return c.json({ authorizeUrl, state });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+adStudioRoute.post("/integrations/meta/callback", async (c) => {
+  try {
+    const auth = c.var.auth;
+    const body = z
+      .object({
+        restaurantId: z.string().cuid(),
+        code: z.string().min(8).max(2000),
+        state: z.string().min(8).max(200),
+      })
+      .parse(await c.req.json());
+
+    const restaurant = await loadRestaurantForUser(body.restaurantId, auth.clerkId);
+    ensureAdStudioEnabled(restaurant);
+    enforceMetaApiRateLimit(restaurant.id);
+
+    const integration = await prisma.metaAdsIntegration.findUnique({
+      where: { restaurantId: restaurant.id },
+    });
+    if (!integration?.pendingState || !integration.pendingStateAt) {
+      throw new ApiError("No pending OAuth state — start the flow again.", 409);
+    }
+    // Constant-time compare + TTL check
+    if (
+      integration.pendingState.length !== body.state.length ||
+      !timingSafeEqualString(integration.pendingState, body.state)
+    ) {
+      throw new ApiError("State mismatch — start the flow again.", 400);
+    }
+    const stateAgeMs = Date.now() - integration.pendingStateAt.getTime();
+    if (stateAgeMs > PENDING_STATE_TTL_MIN * 60 * 1000) {
+      throw new ApiError("OAuth state expired — start the flow again.", 400);
+    }
+
+    const redirectUri = buildMetaCallbackUri();
+    const shortLived = await exchangeCodeForShortLivedToken({ code: body.code, redirectUri });
+    const longLived = await exchangeForLongLivedToken(shortLived.accessToken);
+    const [scopes, metaUserId] = await Promise.all([
+      fetchGrantedScopes(longLived.accessToken),
+      fetchAdsMetaUserId(longLived.accessToken),
+    ]);
+
+    await prisma.metaAdsIntegration.update({
+      where: { id: integration.id },
+      data: {
+        status: "connected",
+        accessTokenCipher: encryptMetaAdsToken(longLived.accessToken),
+        tokenLastFour: getTokenLastFour(longLived.accessToken),
+        tokenExpiresAt: new Date(Date.now() + longLived.expiresInSec * 1000),
+        scopes,
+        // C-1 fix: persist Meta user_id for data-deletion / deauthorize
+        // callbacks. Best-effort — falls back to existing value if /me
+        // failed transiently (won't overwrite a previously-known id).
+        metaUserId: metaUserId ?? undefined,
+        connectedAt: new Date(),
+        lastError: null,
+        // Clear the pending state so the same code can't be replayed.
+        pendingState: null,
+        pendingStateAt: null,
+      },
+    });
+
+    return c.json({ ok: true, requiresAdAccountSelection: true });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+function isMetaBetaRestaurant(restaurantId: string): boolean {
+  const allowlist = (env.AD_STUDIO_META_BETA_RESTAURANT_IDS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  // Empty allowlist = open to everyone (post-Tech-Provider production state).
+  if (allowlist.length === 0) return true;
+  return allowlist.includes(restaurantId);
+}
+
+adStudioRoute.get("/integrations/meta", async (c) => {
+  try {
+    const auth = c.var.auth;
+    const restaurantId = c.req.query("restaurantId");
+    if (!restaurantId) throw new ApiError("restaurantId is required", 400);
+    const restaurant = await loadRestaurantForUser(restaurantId, auth.clerkId);
+    ensureAdStudioEnabled(restaurant);
+
+    const integration = await prisma.metaAdsIntegration.findUnique({
+      where: { restaurantId: restaurant.id },
+      // Strict select — never expose accessTokenCipher or pendingState.
+      select: {
+        id: true,
+        status: true,
+        businessId: true,
+        businessName: true,
+        adAccountId: true,
+        adAccountName: true,
+        pageId: true,
+        pageName: true,
+        pixelId: true,
+        tokenLastFour: true,
+        tokenExpiresAt: true,
+        scopes: true,
+        connectedAt: true,
+        lastSyncedAt: true,
+        lastError: true,
+      },
+    });
+
+    return c.json({
+      integration,
+      betaAccess: isMetaBetaRestaurant(restaurant.id),
+    });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+adStudioRoute.delete("/integrations/meta", async (c) => {
+  try {
+    const auth = c.var.auth;
+    const body = z.object({ restaurantId: z.string().cuid() }).parse(await c.req.json());
+    const restaurant = await loadRestaurantForUser(body.restaurantId, auth.clerkId);
+    ensureAdStudioEnabled(restaurant);
+
+    await prisma.metaAdsIntegration.update({
+      where: { restaurantId: restaurant.id },
+      data: {
+        status: "disconnected",
+        accessTokenCipher: null,
+        tokenLastFour: null,
+        tokenExpiresAt: null,
+        scopes: [],
+        pendingState: null,
+        pendingStateAt: null,
+      },
+    });
+    // Stop autopilot on any campaigns linked to this integration.
+    await prisma.adLiveCampaign.updateMany({
+      where: { metaIntegration: { restaurantId: restaurant.id } },
+      data: { autoSync: false, metaIntegrationId: null },
+    });
+    return c.json({ ok: true });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+adStudioRoute.get("/integrations/meta/ad-accounts", async (c) => {
+  try {
+    const auth = c.var.auth;
+    const restaurantId = c.req.query("restaurantId");
+    if (!restaurantId) throw new ApiError("restaurantId is required", 400);
+    const restaurant = await loadRestaurantForUser(restaurantId, auth.clerkId);
+    ensureAdStudioEnabled(restaurant);
+
+    const integration = await prisma.metaAdsIntegration.findUnique({
+      where: { restaurantId: restaurant.id },
+    });
+    if (!integration?.accessTokenCipher) {
+      throw new ApiError("Meta is not connected for this restaurant.", 409);
+    }
+    enforceMetaApiRateLimit(restaurant.id);
+    let token: string;
+    try {
+      token = decryptMetaAdsToken(integration.accessTokenCipher);
+    } catch {
+      // M3: graceful handling — flip integration to failed + force re-consent
+      // instead of bubbling a 500. This blocks token-tampering oracles.
+      await prisma.metaAdsIntegration.update({
+        where: { id: integration.id },
+        data: { status: "failed", lastError: "Token decryption failed — please reconnect." },
+      });
+      throw new ApiError("Meta token is invalid. Please reconnect.", 409);
+    }
+    const accounts = await listAdAccounts(token);
+    return c.json({ accounts });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+adStudioRoute.post("/integrations/meta/select-ad-account", async (c) => {
+  try {
+    const auth = c.var.auth;
+    const body = z
+      .object({
+        restaurantId: z.string().cuid(),
+        adAccountId: z.string().regex(/^act_\d+$/, "ad account id must be in act_NNN format"),
+        adAccountName: z.string().max(120).optional(),
+        businessId: z.string().regex(/^\d+$/).optional(),
+        businessName: z.string().max(120).optional(),
+        pageId: z.string().regex(/^\d+$/).optional(),
+        pageName: z.string().max(120).optional(),
+        pixelId: z.string().regex(/^\d+$/).optional(),
+      })
+      .parse(await c.req.json());
+    const restaurant = await loadRestaurantForUser(body.restaurantId, auth.clerkId);
+    ensureAdStudioEnabled(restaurant);
+
+    const integration = await prisma.metaAdsIntegration.update({
+      where: { restaurantId: restaurant.id },
+      data: {
+        adAccountId: body.adAccountId,
+        adAccountName: body.adAccountName ?? null,
+        businessId: body.businessId ?? null,
+        businessName: body.businessName ?? null,
+        pageId: body.pageId ?? null,
+        pageName: body.pageName ?? null,
+        pixelId: body.pixelId ?? null,
+      },
+    });
+    return c.json({ integration: { id: integration.id, adAccountId: integration.adAccountId } });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+adStudioRoute.post("/projects/:id/sync-meta", async (c) => {
+  try {
+    const auth = c.var.auth;
+    const project = await loadProjectForUser(c.req.param("id"), auth.clerkId);
+    ensureAdStudioEnabled(project.restaurant);
+    enforceMetaApiRateLimit(project.restaurantId);
+
+    // Find the most-recent live campaign linked to this project + integration.
+    const live = await prisma.adLiveCampaign.findFirst({
+      where: { projectId: project.id, metaIntegration: { restaurantId: project.restaurantId } },
+      orderBy: { launchedAt: "desc" },
+    });
+    if (!live) {
+      throw new ApiError(
+        "No Meta-linked campaign for this project. Connect Meta + link the campaign first.",
+        404
+      );
+    }
+    const result = await syncLiveCampaignFromMeta(live.id);
+    return c.json(result);
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+function timingSafeEqualString(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < a.length; i++) mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return mismatch === 0;
+}
+
+// =============================================================================
+// Phase 2B — performance feedback loop
+// =============================================================================
+
+const META_CAMPAIGN_ID_RX = /^[0-9]{6,30}$/;
+const PLATFORM_RX = /^(meta|tiktok|snapchat)$/;
+
+const linkCampaignSchema = z.object({
+  platform: z.string().regex(PLATFORM_RX),
+  externalCampaignId: z.string().regex(META_CAMPAIGN_ID_RX, "Campaign ID should be the numeric ID from your Ads Manager URL."),
+  externalAdSetIds: z.array(z.string().regex(META_CAMPAIGN_ID_RX)).max(10).optional(),
+  externalAdIds: z.array(z.string().regex(META_CAMPAIGN_ID_RX)).max(50).optional(),
+  launchedAt: z
+    .string()
+    .datetime()
+    .refine((d) => new Date(d) <= new Date(Date.now() + 60 * 60 * 1000), {
+      message: "launchedAt cannot be in the future.",
+    })
+    .optional(),
+  notes: z.string().max(2000).optional(),
+});
+
+adStudioRoute.post("/projects/:id/link-campaign", async (c) => {
+  try {
+    const auth = c.var.auth;
+    const project = await loadProjectForUser(c.req.param("id"), auth.clerkId);
+    ensureAdStudioEnabled(project.restaurant);
+    await enforceLinkCampaignRateLimit(project.restaurantId);
+    const body = linkCampaignSchema.parse(await c.req.json());
+
+    // Reject reuse with a generic 409 — never disclose whether the campaign
+    // ID belongs to *another* project. A specific message turns the unique
+    // index into a cross-tenant existence oracle for paying customers.
+    const existingForId = await prisma.adLiveCampaign.findUnique({
+      where: { platform_externalCampaignId: { platform: body.platform, externalCampaignId: body.externalCampaignId } },
+    });
+    if (existingForId && existingForId.projectId !== project.id) {
+      throw new ApiError("This campaign ID can't be linked to this project.", 409);
+    }
+
+    // If the restaurant has a connected Meta integration AND the linked
+    // platform is meta, auto-attach the live campaign to it so the cron
+    // sync picks it up without a separate user step.
+    let metaIntegrationId: string | null = null;
+    if (body.platform === "meta") {
+      const integration = await prisma.metaAdsIntegration.findUnique({
+        where: { restaurantId: project.restaurantId },
+        select: { id: true, status: true, accessTokenCipher: true },
+      });
+      if (integration?.status === "connected" && integration.accessTokenCipher) {
+        metaIntegrationId = integration.id;
+      }
+    }
+
+    const live = await prisma.adLiveCampaign.upsert({
+      where: { platform_externalCampaignId: { platform: body.platform, externalCampaignId: body.externalCampaignId } },
+      create: {
+        projectId: project.id,
+        platform: body.platform,
+        externalCampaignId: body.externalCampaignId,
+        externalAdSetIds: body.externalAdSetIds ?? [],
+        externalAdIds: body.externalAdIds ?? [],
+        launchedAt: body.launchedAt ? new Date(body.launchedAt) : new Date(),
+        notes: body.notes ?? null,
+        status: "linked",
+        metaIntegrationId,
+        autoSync: metaIntegrationId !== null,
+      },
+      update: {
+        externalAdSetIds: body.externalAdSetIds ?? [],
+        externalAdIds: body.externalAdIds ?? [],
+        launchedAt: body.launchedAt ? new Date(body.launchedAt) : undefined,
+        // Use undefined (not null) so a re-link without notes preserves the prior note.
+        notes: body.notes ?? undefined,
+        // Refresh the integration link in case the owner just connected Meta.
+        metaIntegrationId: metaIntegrationId ?? undefined,
+        autoSync: metaIntegrationId !== null ? true : undefined,
+      },
+    });
+
+    return c.json({ liveCampaign: live });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+const reportMetricsSchema = z.object({
+  liveCampaignId: z.string().cuid(),
+  daysLive: z.number().int().min(1).max(180),
+  variants: z
+    .array(
+      z.object({
+        creativeId: z.string().cuid(),
+        spendAed: z.number().nonnegative().max(1_000_000),
+        impressions: z.number().int().nonnegative().max(100_000_000),
+        reach: z.number().int().nonnegative().max(100_000_000).optional(),
+        clicks: z.number().int().nonnegative().max(10_000_000),
+        conversions: z.number().int().nonnegative().max(1_000_000),
+        revenueAed: z.number().nonnegative().max(10_000_000).optional(),
+        frequency: z.number().nonnegative().max(50).optional(),
+        dailyBudgetAed: z.number().nonnegative().max(100_000).optional(),
+        // Phase 2B: extraJson intentionally NOT accepted from clients.
+        // Phase 4 (Meta API sync) will populate it with a fixed allowlist
+        // of platform-returned fields. Until then, accepting arbitrary JSON
+        // from the UI is a stored-data abuse vector.
+      })
+    )
+    .min(1)
+    .max(10),
+});
+
+adStudioRoute.post("/projects/:id/report-metrics", async (c) => {
+  try {
+    const auth = c.var.auth;
+    const project = await loadProjectForUser(c.req.param("id"), auth.clerkId);
+    ensureAdStudioEnabled(project.restaurant);
+    await enforceReportMetricsRateLimit(project.restaurantId);
+    const body = reportMetricsSchema.parse(await c.req.json());
+
+    // Tenant isolation: live campaign must belong to this project.
+    const live = await prisma.adLiveCampaign.findFirst({
+      where: { id: body.liveCampaignId, projectId: project.id },
+    });
+    if (!live) throw new ApiError("Live campaign not found for this project.", 404);
+
+    // Validate every reported creative ID belongs to this project. We do
+    // NOT pin creatives to a specific liveCampaign — same-tenant data
+    // integrity (an owner could accidentally report metrics for a creative
+    // launched in a previous campaign) is acceptable; cross-tenant isolation
+    // is what matters here.
+    const projectCreativeIds = new Set(project.creatives.map((c) => c.id));
+    for (const v of body.variants) {
+      if (!projectCreativeIds.has(v.creativeId)) {
+        throw new ApiError(`Creative ${v.creativeId} does not belong to this project.`, 400);
+      }
+    }
+
+    const reportedAt = new Date();
+    const rows = body.variants.map((v) => {
+      const derived = deriveMetrics({
+        spendAed: v.spendAed,
+        impressions: v.impressions,
+        reach: v.reach,
+        clicks: v.clicks,
+        conversions: v.conversions,
+        revenueAed: v.revenueAed,
+        frequency: v.frequency,
+      });
+      const variantNumber = project.creatives.find((c) => c.id === v.creativeId)?.variant ?? null;
+      return {
+        liveCampaignId: live.id,
+        creativeId: v.creativeId,
+        variant: variantNumber,
+        source: "owner_reported" as const,
+        reportedAt,
+        daysLive: body.daysLive,
+        spendAed: new Prisma.Decimal(v.spendAed.toFixed(2)),
+        impressions: v.impressions,
+        reach: v.reach ?? null,
+        clicks: v.clicks,
+        conversions: v.conversions,
+        revenueAed: v.revenueAed != null ? new Prisma.Decimal(v.revenueAed.toFixed(2)) : null,
+        ctrPct: derived.ctrPct != null ? new Prisma.Decimal(derived.ctrPct.toFixed(3)) : null,
+        cpmAed: derived.cpmAed != null ? new Prisma.Decimal(derived.cpmAed.toFixed(2)) : null,
+        cpcAed: derived.cpcAed != null ? new Prisma.Decimal(derived.cpcAed.toFixed(2)) : null,
+        cpaAed: derived.cpaAed != null ? new Prisma.Decimal(derived.cpaAed.toFixed(2)) : null,
+        frequency: v.frequency != null ? new Prisma.Decimal(v.frequency.toFixed(2)) : null,
+        dailyBudgetAed: v.dailyBudgetAed != null ? new Prisma.Decimal(v.dailyBudgetAed.toFixed(2)) : null,
+        // extraJson populated only by trusted server-side sources (Phase 4
+        // Meta API sync). Owner submissions can never write here.
+        extraJson: Prisma.JsonNull,
+      } satisfies Prisma.AdPerformanceSnapshotCreateManyInput;
+    });
+
+    // Soft idempotency: if any snapshot was reported in the last 60 seconds
+    // for this live campaign, treat the request as a duplicate-tap and return
+    // the prior result. Phase 4 (Meta API sync) will introduce a proper
+    // (liveCampaignId, creativeId, reportingPeriodKey) unique index.
+    const recent = await prisma.adPerformanceSnapshot.findFirst({
+      where: {
+        liveCampaignId: live.id,
+        createdAt: { gte: new Date(Date.now() - 60 * 1000) },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    if (recent) {
+      return c.json({
+        ok: true,
+        snapshotsRecorded: 0,
+        reportedAt: recent.reportedAt,
+        deduplicated: true,
+      });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await tx.adPerformanceSnapshot.createMany({ data: rows });
+      await tx.adLiveCampaign.update({
+        where: { id: live.id },
+        data: { status: "reporting", lastSyncedAt: reportedAt },
+      });
+    });
+
+    return c.json({ ok: true, snapshotsRecorded: rows.length, reportedAt });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+adStudioRoute.get("/projects/:id/insights", async (c) => {
+  try {
+    const auth = c.var.auth;
+    const project = await loadProjectForUser(c.req.param("id"), auth.clerkId);
+    ensureAdStudioEnabled(project.restaurant);
+
+    // Pick the most recently launched live campaign for this project.
+    const live = await prisma.adLiveCampaign.findFirst({
+      where: { projectId: project.id },
+      orderBy: { launchedAt: "desc" },
+      include: {
+        snapshots: { orderBy: { reportedAt: "desc" }, take: 200 },
+      },
+    });
+
+    if (!live) {
+      return c.json({ liveCampaign: null, insights: null });
+    }
+
+    const insights = summarizeCampaignInsights({
+      liveCampaignId: live.id,
+      platform: live.platform,
+      creatives: project.creatives.map((c) => ({
+        id: c.id,
+        variant: c.variant,
+        archetypeId: c.archetypeId,
+      })),
+      snapshots: live.snapshots,
+    });
+
+    return c.json({ liveCampaign: live, insights });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+// =============================================================================
+// Phase 1.5 — single-variant image regeneration
+// =============================================================================
+
+adStudioRoute.post("/creatives/:creativeId/regenerate-image", async (c) => {
+  try {
+    const auth = c.var.auth;
+    const creativeId = c.req.param("creativeId");
+
+    const creative = await prisma.adCreative.findUnique({
+      where: { id: creativeId },
+      include: { project: { include: { restaurant: { select: { id: true, ownerId: true } } } } },
+    });
+    if (!creative) throw new ApiError("Creative not found", 404);
+
+    const restaurant = await loadRestaurantForUser(creative.project.restaurantId, auth.clerkId);
+    ensureAdStudioEnabled(restaurant);
+
+    // Image regen has its own daily pool so it doesn't eat full-project quota,
+    // plus shares the global USD ceiling for absolute spend control.
+    await enforceGlobalBudget();
+    await enforceImageRegenRateLimit(restaurant.id);
+
+    // Race-safe: only enqueue if not already generating.
+    const flipped = await prisma.adCreative.updateMany({
+      where: { id: creativeId, status: { not: "generating" } },
+      data: { status: "generating" },
+    });
+    if (flipped.count === 0) {
+      throw new ApiError("Image regeneration already in progress for this variant", 409);
+    }
+
+    await enqueueRegenImage({ creativeId });
+    return c.json({ ok: true });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+// =============================================================================
+// Phase 1.5 — duplicate project (clone the brief into a new draft)
+// =============================================================================
+
+adStudioRoute.post("/projects/:id/duplicate", async (c) => {
+  try {
+    const auth = c.var.auth;
+    const project = await loadProjectForUser(c.req.param("id"), auth.clerkId);
+    const ents = ensureAdStudioEnabled(project.restaurant);
+
+    // Honor monthly project quota
+    if (ents.adProjectsPerMonth !== null) {
+      const monthStart = new Date();
+      monthStart.setDate(1);
+      monthStart.setHours(0, 0, 0, 0);
+      const created = await prisma.adProject.count({
+        where: { restaurantId: project.restaurantId, createdAt: { gte: monthStart } },
+      });
+      if (created >= ents.adProjectsPerMonth) {
+        throw new ApiError(
+          `You've reached this month's limit of ${ents.adProjectsPerMonth} projects.`,
+          429
+        );
+      }
+    }
+
+    // Validate primaryDishId still belongs to this restaurant — null it
+    // out if the source dish has been deleted/moved so generation doesn't
+    // fail downstream with a broken reference.
+    let resolvedPrimaryDishId: string | null = null;
+    if (project.primaryDishId) {
+      const stillExists = await prisma.menuItem.findFirst({
+        where: { id: project.primaryDishId, restaurantId: project.restaurantId },
+        select: { id: true },
+      });
+      resolvedPrimaryDishId = stillExists?.id ?? null;
+    }
+
+    const cloned = await prisma.adProject.create({
+      data: {
+        restaurantId: project.restaurantId,
+        name: `${project.name} (copy)`,
+        campaignType: project.campaignType,
+        goal: project.goal,
+        countries: project.countries,
+        cuisines: project.cuisines,
+        targetPlatforms: project.targetPlatforms,
+        budgetTier: project.budgetTier,
+        budgetAed: project.budgetAed,
+        durationWeeks: project.durationWeeks ?? null,
+        primaryDishId: resolvedPrimaryDishId,
+        brandVoice: project.brandVoice ?? null,
+        status: "draft",
+        briefJson: project.briefJson as Prisma.InputJsonValue,
+      },
+    });
+    return c.json({ project: cloned }, 201);
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+// =============================================================================
+// Phase 1.5 — mint or fetch the share token
+// =============================================================================
+
+adStudioRoute.post("/projects/:id/share", async (c) => {
+  try {
+    const auth = c.var.auth;
+    const project = await loadProjectForUser(c.req.param("id"), auth.clerkId);
+    ensureAdStudioEnabled(project.restaurant);
+
+    if (project.status !== "ready" && project.status !== "exported") {
+      throw new ApiError("Project must be ready before sharing", 409);
+    }
+
+    let token = project.shareToken;
+    if (!token) {
+      // 22 chars of base64url ≈ 132 bits of entropy — strong enough that
+      // unauthenticated guessing is infeasible without a public listing.
+      const candidate = randomBytes(16).toString("base64url");
+      // Race-safe: only set the token if no other concurrent request already
+      // wrote one. Read-back picks up whoever won the race.
+      await prisma.adProject.updateMany({
+        where: { id: project.id, shareToken: null },
+        data: { shareToken: candidate },
+      });
+      const fresh = await prisma.adProject.findUnique({
+        where: { id: project.id },
+        select: { shareToken: true },
+      });
+      token = fresh?.shareToken ?? candidate;
+    }
+
+    return c.json({ shareToken: token });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+adStudioRoute.delete("/projects/:id/share", async (c) => {
+  try {
+    const auth = c.var.auth;
+    const project = await loadProjectForUser(c.req.param("id"), auth.clerkId);
+    ensureAdStudioEnabled(project.restaurant);
+    await prisma.adProject.update({
+      where: { id: project.id },
+      data: { shareToken: null },
+    });
+    return c.json({ ok: true });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+// =============================================================================
+// Phase 1.5 — public share endpoint (NO auth, token-gated)
+// =============================================================================
+// Mounted on the same router but explicitly skips `requireAuth` by short-circuiting
+// before any auth-touching code is reached. The middleware runs first though;
+// for true unauthenticated access we expose this from a separate router below.
+
+export const adStudioPublicRoute = new Hono();
+
+// In-memory IP rate limiter (60 req/min) — defence-in-depth on the only
+// unauthenticated ingress. For multi-instance deployments swap for Redis;
+// for Phase 1.5 single-instance Railway this is sufficient.
+const PUBLIC_RATE_WINDOW_MS = 60_000;
+const PUBLIC_RATE_MAX = 60;
+const publicHits = new Map<string, { count: number; resetAt: number }>();
+
+function publicRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const entry = publicHits.get(ip);
+  if (!entry || entry.resetAt < now) {
+    publicHits.set(ip, { count: 1, resetAt: now + PUBLIC_RATE_WINDOW_MS });
+    return true;
+  }
+  if (entry.count >= PUBLIC_RATE_MAX) return false;
+  entry.count += 1;
+  return true;
+}
+
+// Periodic cleanup so the map doesn't grow unbounded.
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of publicHits) {
+    if (entry.resetAt < now) publicHits.delete(ip);
+  }
+}, 5 * 60_000).unref?.();
+
+function applyPublicCacheHeaders(c: Context) {
+  c.header("Cache-Control", "private, no-store, max-age=0");
+  c.header("Pragma", "no-cache");
+}
+
+adStudioPublicRoute.get("/projects/:token", async (c) => {
+  // Defence-in-depth: identical caching headers on every code path so a 404
+  // for a revoked token can't be served from any intermediary cache.
+  applyPublicCacheHeaders(c);
+
+  // Rate-limit by client IP (best-effort — falls back to a constant key
+  // when the proxy chain doesn't expose a peer IP).
+  const ip =
+    c.req.header("cf-connecting-ip") ??
+    c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ??
+    c.req.header("x-real-ip") ??
+    "unknown";
+  if (!publicRateLimit(ip)) {
+    return c.json({ error: "Rate limit exceeded" }, 429);
+  }
+
+  try {
+    const token = c.req.param("token");
+    if (!/^[A-Za-z0-9_-]{16,64}$/.test(token)) {
+      throw new ApiError("Share link is no longer available", 404);
+    }
+
+    const project = await prisma.adProject.findUnique({
+      where: { shareToken: token },
+      include: {
+        // Only fields the public page actually renders. Slug intentionally
+        // dropped so a recipient can't pivot from a single share to the full
+        // restaurant portfolio without a separate share decision.
+        restaurant: { select: { name: true, location: true, logoUrl: true, cuisineType: true } },
+        creatives: {
+          where: { isApproved: true, status: "ready" },
+          orderBy: { variant: "asc" },
+          select: {
+            id: true,
+            variant: true,
+            archetypeId: true,
+            language: true,
+            headline: true,
+            primaryText: true,
+            ctaText: true,
+            headlineAr: true,
+            primaryTextAr: true,
+            ctaTextAr: true,
+            heroImageUrl: true,
+          },
+        },
+      },
+    });
+
+    if (!project || (project.status !== "ready" && project.status !== "exported")) {
+      throw new ApiError("Share link is no longer available", 404);
+    }
+
+    // Only expose minimal fields — never restaurantId, ownerId, briefJson,
+    // costs, internal taxonomy ids (archetypeId/hookId/ctaId), or status.
+    return c.json({
+      project: {
+        name: project.name,
+        countries: project.countries,
+        cuisines: project.cuisines,
+        creatives: project.creatives,
+      },
+      restaurant: project.restaurant,
+    });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});

@@ -1,8 +1,25 @@
+import crypto from "node:crypto";
 import { Hono } from "hono";
 import { z } from "zod";
+import type { Prisma } from "@prisma/client";
 import { ApiError } from "@/lib/errors";
+import { env } from "@/lib/env";
 import { errorResponse } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
+
+/**
+ * C-3 fix: derive a deterministic 64-bit signed integer from a restaurant ID
+ * to feed `pg_advisory_xact_lock`. Postgres advisory locks accept either a
+ * single bigint or two int4s. We use the first 8 bytes of SHA-256(restaurantId)
+ * interpreted as a signed bigint (within JS BigInt range, then converted to
+ * a string Prisma can pass as `bigint`). Hash-collision risk is acceptable:
+ * the worst case is two unrelated restaurants serialize their campaign sends.
+ */
+function restaurantIdToLockKey(restaurantId: string): bigint {
+  const hash = crypto.createHash("sha256").update(restaurantId).digest();
+  // Read first 8 bytes as signed BigInt to fit Postgres bigint range.
+  return hash.readBigInt64BE(0);
+}
 import {
   WHATSAPP_TEMPLATE_LIBRARY,
   buildTemplateParameters,
@@ -11,6 +28,7 @@ import {
   encryptAccessToken,
   exchangeEmbeddedSignupCode,
   extractEmbeddedSignupCustomerAssets,
+  fetchMetaUserId,
   fetchWhatsAppAccountPhoneNumbers,
   fetchWhatsAppPhoneNumber,
   fetchWhatsAppTemplates,
@@ -460,6 +478,10 @@ export const crmRoute = new Hono<{
       }
 
       const accessToken = await exchangeEmbeddedSignupCode(data.code);
+      // C-1 fix: resolve Meta `user_id` so data-deletion + deauthorize
+      // callbacks can fan-out across this user's integrations. Failure
+      // here is non-fatal — best-effort.
+      const metaUserId = await fetchMetaUserId(accessToken);
       const [phoneNumber, accountPhoneNumbers] = await Promise.all([
         fetchWhatsAppPhoneNumber({
           accessToken,
@@ -502,6 +524,7 @@ export const crmRoute = new Hono<{
           status: "connected",
           wabaId: sessionAssets.wabaId,
           businessAccountId: sessionAssets.businessAccountId ?? null,
+          metaUserId,
           phoneNumberId: sessionAssets.phoneNumberId,
           displayPhoneNumber: normalizeWhatsAppPhone(displayPhoneNumber),
           accessTokenCipher: encryptAccessToken(accessToken),
@@ -513,6 +536,7 @@ export const crmRoute = new Hono<{
           status: "connected",
           wabaId: sessionAssets.wabaId,
           businessAccountId: sessionAssets.businessAccountId ?? undefined,
+          metaUserId: metaUserId ?? undefined,
           phoneNumberId: sessionAssets.phoneNumberId,
           displayPhoneNumber: normalizeWhatsAppPhone(displayPhoneNumber),
           accessTokenCipher: encryptAccessToken(accessToken),
@@ -562,6 +586,11 @@ export const crmRoute = new Hono<{
       const auth = c.get("auth");
       await getOwnedRestaurant(restaurantId, auth.clerkId);
 
+      // C4 fix: zero out the encrypted token on disconnect. Previously the
+      // ~60-day Meta token cipher persisted in the row even after a
+      // "disconnect" — combined with a future key compromise or backup
+      // leak, that's recoverable credentials. PDPL/GDPR right-to-erasure
+      // also expects credentials wiped on disconnect.
       const integration = await prisma.whatsAppIntegration.update({
         where: {
           restaurantId,
@@ -569,6 +598,16 @@ export const crmRoute = new Hono<{
         data: {
           status: "disconnected",
           lastError: null,
+          accessTokenCipher: "",
+          tokenLastFour: null,
+          wabaId: null,
+          // M-3: also null the Meta user ID so a future deletion
+          // callback for this user only fans out to integrations they
+          // still control.
+          metaUserId: null,
+          // Reset connectedAt so the dashboard "connected since" badge
+          // doesn't lie after disconnect.
+          connectedAt: null,
         },
         select: {
           id: true,
@@ -923,7 +962,16 @@ export const crmRoute = new Hono<{
       }
 
       const latestInbound = conversation.messages[0];
-      if (conversation.integration && latestInbound?.providerMessageId) {
+      // M5 fix: don't decrypt the token when the integration is no longer
+      // connected. A disconnected integration may have an empty cipher
+      // (DELETE wipes it) or one that's encrypted with a rotated key —
+      // both cases throw inside decryptAccessToken and surface a 503 to
+      // the user just for marking a message read. Silently skip instead.
+      if (
+        conversation.integration?.status === "connected" &&
+        conversation.integration.accessTokenCipher &&
+        latestInbound?.providerMessageId
+      ) {
         await markWhatsAppMessageRead({
           accessToken: decryptAccessToken(conversation.integration.accessTokenCipher),
           phoneNumberId: conversation.integration.phoneNumberId,
@@ -997,25 +1045,54 @@ export const crmRoute = new Hono<{
       });
       const canSendViaApi = deliveryMode === "meta_cloud_api";
       const inactiveCutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      // C6 fix: campaigns must NEVER send to customers without proof of
+      // consent. Filter requires:
+      //  - marketingOptIn = true (current state)
+      //  - marketingOptInAt = not null (a consent timestamp exists)
+      //  - latest CustomerConsent row is opt_in (proof, not just a flag)
+      // The latest-consent check requires a sub-query (Prisma can't express
+      // "the most recent row in a one-to-many" in `where`), so we filter
+      // the candidate set with `consents.some({status:opt_in})` here and
+      // confirm "latest is opt_in" per-customer in memory below.
+      // (Note: an earlier draft also enforced 12-month consent freshness;
+      // dropped because WhatsApp's marketing policy is "valid opt-in with
+      // no opt-out" and PDPL doesn't actually require periodic re-confirm.
+      // The latest-consent precedence check is the real safeguard.)
+      const baseWhere = {
+        restaurantId,
+        marketingOptIn: true,
+        marketingOptInAt: { not: null },
+        // Customer must have at least one opt_in consent record to be
+        // eligible (defends against direct DB writes / migrations that
+        // flip the boolean without a paper trail).
+        consents: { some: { status: "opt_in" as const } },
+      } satisfies Prisma.CustomerWhereInput;
       const customerWhere =
         data.type === "inactive_30"
           ? {
-              restaurantId,
-              marketingOptIn: true,
-              lastOrderAt: {
-                lt: inactiveCutoff,
-              },
+              ...baseWhere,
+              lastOrderAt: { lt: inactiveCutoff },
             }
-          : {
-              restaurantId,
-              marketingOptIn: true,
-            };
+          : baseWhere;
 
-      const customers = await prisma.customer.findMany({
+      const candidates = await prisma.customer.findMany({
         where: customerWhere,
         orderBy: [{ lastOrderAt: "asc" }, { createdAt: "asc" }],
         take: 100,
+        include: {
+          consents: {
+            orderBy: { createdAt: "desc" },
+            take: 1,
+            select: { status: true },
+          },
+        },
       });
+      // Final precedence check: only customers whose MOST RECENT consent
+      // is opt_in are sent to. If they ever opted out, they're excluded
+      // even if marketingOptIn = true (defense-in-depth against flips).
+      const customers = candidates.filter(
+        (cust) => cust.consents[0]?.status === "opt_in"
+      );
       const fallbackBody = getDefaultCampaignBody({
         type: data.type,
         restaurantName: restaurant.name,
@@ -1030,20 +1107,137 @@ export const crmRoute = new Hono<{
             ? "New promotion broadcast"
             : "Weekend special broadcast");
 
-      const campaign = await prisma.campaign.create({
-        data: {
-          restaurantId,
-          promotionId: promotion?.id ?? null,
-          type: data.type,
-          status: canSendViaApi ? "sending" : "logged",
-          name: campaignName,
-          templateName,
-          body,
-          targetSegment: data.type,
-          targetCount: customers.length,
-          loggedCount: 0,
-        },
+      // C-3 + C-4 fix: budget-reservation pattern. Concurrent campaign sends
+      // (double-click, two operators, two campaigns at once) used to race —
+      // each saw the same `sentInWindow` count and could push the WABA over
+      // its messaging tier, triggering Meta's quality-rating freeze. Same
+      // race for the per-(customer, template) frequency cap.
+      //
+      // Fix: wrap the count + reservation in a single transaction guarded by
+      // a Postgres advisory lock keyed on the restaurant. The lock auto-
+      // releases on commit, so we don't hold a connection during the slow
+      // Meta HTTP loop. After commit, the budget is committed in MessageLog
+      // (status=queued for sendable, skipped_* for held-back rows), and we
+      // iterate the queued rows for the actual API sends.
+      const frequencyWindow = new Date(
+        Date.now() - env.WHATSAPP_FREQUENCY_CAP_HOURS * 60 * 60 * 1000
+      );
+      const tierWindowStart = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const lockKey = restaurantIdToLockKey(restaurantId);
+
+      const reservation = await prisma.$transaction(async (tx) => {
+        // pg_advisory_xact_lock blocks until acquired and releases on commit.
+        // Single integer key derived from restaurantId — the hash collision
+        // risk is acceptable (worst case: two unrelated restaurants serialize
+        // their campaigns; correctness preserved).
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(${lockKey}::bigint)`;
+
+        let tierBudget = Number.MAX_SAFE_INTEGER;
+        if (canSendViaApi) {
+          const sentInWindow = await tx.messageLog.count({
+            where: {
+              restaurantId,
+              channel: "whatsapp",
+              direction: "outbound",
+              // Reserved rows count toward the budget — defends against a
+              // race where two transactions stack reservations while the
+              // first hasn't committed any "sent" yet. `queued` is a
+              // reservation; `sent/delivered/read` is the real consumption.
+              status: { in: ["queued", "sent", "delivered", "read"] },
+              createdAt: { gte: tierWindowStart },
+            },
+          });
+          tierBudget = Math.max(0, env.WHATSAPP_DAILY_TIER_LIMIT - sentInWindow);
+        }
+
+        const newCampaign = await tx.campaign.create({
+          data: {
+            restaurantId,
+            promotionId: promotion?.id ?? null,
+            type: data.type,
+            status: canSendViaApi ? "sending" : "logged",
+            name: campaignName,
+            templateName,
+            body,
+            targetSegment: data.type,
+            targetCount: customers.length,
+            loggedCount: 0,
+          },
+        });
+
+        const reservations: Array<{
+          customerId: string;
+          status: "queued" | "skipped_tier_cap" | "skipped_frequency_cap";
+        }> = [];
+        let queuedCount = 0;
+        let skippedTier = 0;
+        let skippedFrequency = 0;
+
+        if (canSendViaApi) {
+          // Frequency cap: bulk-fetch all (customerId, templateName) pairs
+          // sent in the window, in one query — avoids the previous N+1.
+          const recentSends = await tx.messageLog.findMany({
+            where: {
+              customerId: { in: customers.map((c) => c.id) },
+              templateName,
+              channel: "whatsapp",
+              direction: "outbound",
+              status: { in: ["queued", "sent", "delivered", "read"] },
+              createdAt: { gte: frequencyWindow },
+            },
+            select: { customerId: true },
+          });
+          const frequencyHit = new Set(
+            recentSends.map((row) => row.customerId).filter((id): id is string => id !== null)
+          );
+
+          for (const customer of customers) {
+            if (frequencyHit.has(customer.id)) {
+              reservations.push({ customerId: customer.id, status: "skipped_frequency_cap" });
+              skippedFrequency += 1;
+            } else if (queuedCount >= tierBudget) {
+              reservations.push({ customerId: customer.id, status: "skipped_tier_cap" });
+              skippedTier += 1;
+            } else {
+              reservations.push({ customerId: customer.id, status: "queued" });
+              queuedCount += 1;
+            }
+          }
+        } else {
+          // Owner-driven WhatsApp link mode — no API budget, no frequency
+          // cap, just log the link rows directly. Status will be flipped
+          // to "logged" by the post-transaction phase.
+          for (const customer of customers) {
+            reservations.push({ customerId: customer.id, status: "queued" });
+            queuedCount += 1;
+          }
+        }
+
+        if (reservations.length > 0) {
+          await tx.messageLog.createMany({
+            data: reservations.map((res) => ({
+              restaurantId,
+              customerId: res.customerId,
+              campaignId: newCampaign.id,
+              channel: "whatsapp",
+              direction: "outbound",
+              status: res.status,
+              body:
+                res.status === "skipped_tier_cap"
+                  ? "[skipped: daily messaging tier reached]"
+                  : res.status === "skipped_frequency_cap"
+                    ? "[skipped: same template sent in last 24h]"
+                    : "",
+              templateName,
+            })),
+          });
+        }
+
+        return { campaign: newCampaign, queuedCount, skippedTier, skippedFrequency };
       });
+
+      const campaign = reservation.campaign;
+      const tierCappedCount = reservation.skippedTier;
 
       let accessToken: string | null = null;
       if (canSendViaApi && integration) {
@@ -1052,8 +1246,20 @@ export const crmRoute = new Hono<{
 
       let loggedCount = 0;
       let failedCount = 0;
+      let frequencyCappedCount = reservation.skippedFrequency;
 
-      for (const customer of customers) {
+      // Pull the reserved queued rows for the actual API send loop. The
+      // reservation has already enforced tier + frequency caps atomically —
+      // this loop just iterates and dispatches.
+      const queuedRows = await prisma.messageLog.findMany({
+        where: { campaignId: campaign.id, status: "queued" },
+        include: { customer: true },
+      });
+
+      for (const queued of queuedRows) {
+        const customer = queued.customer;
+        if (!customer) continue;
+
         const parameters = buildTemplateParameters({
           templateName,
           customerName: customer.displayName,
@@ -1068,14 +1274,13 @@ export const crmRoute = new Hono<{
               : renderTemplatePreview(templateName, parameters);
 
         if (!canSendViaApi || !integration || !accessToken) {
-          await prisma.messageLog.create({
+          // Owner-driven mode: flip the queued reservation to `logged` and
+          // attach the wa.me URL.
+          await prisma.messageLog.update({
+            where: { id: queued.id },
             data: {
-              restaurantId,
-              customerId: customer.id,
-              campaignId: campaign.id,
               status: "logged",
               body: personalizedBody,
-              templateName,
               whatsappUrl: buildWhatsappUrl(customer.phoneNumber, personalizedBody),
             },
           });
@@ -1121,19 +1326,13 @@ export const crmRoute = new Hono<{
               },
             });
 
-            const messageLog = await tx.messageLog.create({
+            await tx.messageLog.update({
+              where: { id: queued.id },
               data: {
-                restaurantId,
-                customerId: customer.id,
-                campaignId: campaign.id,
                 status: "sent",
                 body: personalizedBody,
-                templateName,
                 providerMessageId,
                 sentAt,
-              },
-              select: {
-                id: true,
               },
             });
 
@@ -1143,7 +1342,7 @@ export const crmRoute = new Hono<{
                 integrationId: integration.id,
                 conversationId: conversation.id,
                 customerId: customer.id,
-                messageLogId: messageLog.id,
+                messageLogId: queued.id,
                 providerMessageId,
                 direction: "outbound",
                 type: "template",
@@ -1159,14 +1358,11 @@ export const crmRoute = new Hono<{
           loggedCount += 1;
         } catch (error) {
           failedCount += 1;
-          await prisma.messageLog.create({
+          await prisma.messageLog.update({
+            where: { id: queued.id },
             data: {
-              restaurantId,
-              customerId: customer.id,
-              campaignId: campaign.id,
               status: "failed",
               body: personalizedBody,
-              templateName,
               whatsappUrl: buildWhatsappUrl(customer.phoneNumber, personalizedBody),
               errorMessage: error instanceof Error ? error.message : "WhatsApp send failed",
               failedAt: new Date(),
@@ -1175,12 +1371,28 @@ export const crmRoute = new Hono<{
         }
       }
 
+      // C-2 (correctness) fix: campaign final status must reflect what
+      // actually happened. Previously, when every customer was tier-capped,
+      // status was wrongly set to "sent". Compute against `attempted`
+      // (queuedRows.length) — the rows we actually tried — not the original
+      // candidate count.
+      const attempted = queuedRows.length;
+      const heldBack = tierCappedCount + frequencyCappedCount;
+      const campaignStatus = canSendViaApi
+        ? attempted === 0
+          ? heldBack > 0
+            ? "held"
+            : "logged"
+          : failedCount === attempted
+            ? "failed"
+            : "sent"
+        : "logged";
       const updatedCampaign = await prisma.campaign.update({
         where: {
           id: campaign.id,
         },
         data: {
-          status: canSendViaApi && failedCount === customers.length && customers.length > 0 ? "failed" : canSendViaApi ? "sent" : "logged",
+          status: campaignStatus,
           loggedCount,
           loggedAt: new Date(),
         },
@@ -1191,6 +1403,8 @@ export const crmRoute = new Hono<{
         targeted: customers.length,
         sent: canSendViaApi ? loggedCount : 0,
         failed: failedCount,
+        skippedFrequency: frequencyCappedCount,
+        skippedTier: tierCappedCount,
         mode: deliveryMode,
       }, 201);
     } catch (error) {
@@ -1218,6 +1432,32 @@ export const crmRoute = new Hono<{
 
         if (!existingCustomer) {
           throw new ApiError("Customer not found", 404);
+        }
+
+        // C5 fix: opt-out precedence. If this PATCH is trying to flip a
+        // customer back to opt_in BUT the latest user-initiated consent
+        // record is opt_out (e.g. they texted STOP), refuse. The customer
+        // must opt back in via a fresh user-side event (form / keyword) —
+        // the dashboard cannot override a user's stated preference.
+        // WhatsApp's marketing policy treats this as a tier-degrading
+        // violation; PDPL/GDPR explicitly forbid manual re-opt-in by the
+        // controller without the data subject's renewed consent.
+        if (data.marketingOptIn) {
+          const latestConsent = await tx.customerConsent.findFirst({
+            where: { restaurantId, customerId },
+            orderBy: { createdAt: "desc" },
+            select: { status: true, source: true },
+          });
+          if (
+            latestConsent?.status === "opt_out" &&
+            (latestConsent.source === "whatsapp_keyword" ||
+              latestConsent.source === "whatsapp")
+          ) {
+            throw new ApiError(
+              "This customer texted STOP. They must opt in again themselves before you can re-enable marketing.",
+              409
+            );
+          }
         }
 
         const customer = await tx.customer.update({
