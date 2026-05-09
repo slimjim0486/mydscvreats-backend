@@ -11,7 +11,6 @@ const PLATFORM_DOMAINS: Record<CitationPlatformResult["platform"], string[]> = {
   Google: ["google.com", "google.ae"],
   Talabat: ["talabat.com"],
   Deliveroo: ["deliveroo.ae", "deliveroo.com"],
-  Careem: ["careem.com"],
 };
 
 function text(value: unknown) {
@@ -234,7 +233,6 @@ export async function collectCitationsData(
   const platforms = await Promise.all([
     collectPlatform("Talabat", env.APIFY_ACTOR_TALABAT, restaurant.talabatUrl, restaurant),
     collectPlatform("Deliveroo", env.APIFY_ACTOR_DELIVEROO, restaurant.deliverooUrl, restaurant),
-    collectPlatform("Careem", env.APIFY_ACTOR_CAREEM, null, restaurant),
   ]);
 
   return {

@@ -35,7 +35,6 @@ export function computeSeoInputsHash(restaurant: RestaurantSeoContext) {
         talabatUrl: restaurant.talabatUrl,
         deliverooUrl: restaurant.deliverooUrl,
         uberEatsUrl: restaurant.uberEatsUrl,
-        careemUrl: null,
         operatingHours: restaurant.operatingHours ?? null,
       })
     )

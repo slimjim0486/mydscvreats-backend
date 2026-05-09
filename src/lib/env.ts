@@ -26,7 +26,6 @@ const envSchema = z.object({
   APIFY_ACTOR_WEB: z.string().default("apify/website-content-crawler"),
   APIFY_ACTOR_TALABAT: optionalString(),
   APIFY_ACTOR_DELIVEROO: optionalString(),
-  APIFY_ACTOR_CAREEM: optionalString(),
   NANOBANANA_API_KEY: optionalString(),
   NANOBANANA_API_URL: z.preprocess((v) => (v === "" ? undefined : v), z.string().url().optional()),
   R2_ACCOUNT_ID: optionalString(),

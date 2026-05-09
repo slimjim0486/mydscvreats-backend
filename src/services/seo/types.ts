@@ -96,7 +96,7 @@ export interface OnPageData {
 }
 
 export interface CitationPlatformResult {
-  platform: "Google" | "Talabat" | "Deliveroo" | "Careem";
+  platform: "Google" | "Talabat" | "Deliveroo";
   url: string | null;
   found: boolean;
   name: string | null;
