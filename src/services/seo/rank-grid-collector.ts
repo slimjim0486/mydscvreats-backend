@@ -259,7 +259,7 @@ export async function collectRankGridData(
         timeoutMs: 120_000,
         estimateCostUsd: 0.03,
         maxItems: 10,
-        maxTotalChargeUsd: 0.04,
+        maxTotalChargeUsd: 0.5,
         memoryMbytes: 4096,
       }
     );

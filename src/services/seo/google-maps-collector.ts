@@ -169,7 +169,7 @@ export async function collectGoogleMapsData(restaurant: RestaurantSeoContext) {
     {
       timeoutMs: 120_000,
       maxItems: input.maxCrawledPlacesPerSearch,
-      maxTotalChargeUsd: 0.12,
+      maxTotalChargeUsd: 0.5,
       memoryMbytes: 4096,
     }
   );
@@ -220,7 +220,7 @@ export async function collectGoogleReviewsData(restaurant: RestaurantSeoContext)
     {
       timeoutMs: 300_000,
       maxItems: 60,
-      maxTotalChargeUsd: 0.12,
+      maxTotalChargeUsd: 0.5,
       memoryMbytes: 4096,
     }
   );

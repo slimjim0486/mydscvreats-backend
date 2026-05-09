@@ -83,7 +83,7 @@ export async function collectOnPageData(restaurant: RestaurantSeoContext) {
     {
       timeoutMs: 120_000,
       maxItems: 8,
-      maxTotalChargeUsd: 0.05,
+      maxTotalChargeUsd: 0.5,
     }
   );
 

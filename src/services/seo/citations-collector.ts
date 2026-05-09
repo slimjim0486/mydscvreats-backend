@@ -7,6 +7,13 @@ import type {
   RestaurantSeoContext,
 } from "./types";
 
+const PLATFORM_DOMAINS: Record<CitationPlatformResult["platform"], string[]> = {
+  Google: ["google.com", "google.ae"],
+  Talabat: ["talabat.com"],
+  Deliveroo: ["deliveroo.ae", "deliveroo.com"],
+  Careem: ["careem.com"],
+};
+
 function text(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
@@ -38,6 +45,18 @@ function phoneMatch(a: string | null | undefined, b: string | null | undefined) 
   return left.endsWith(right.slice(-7)) || right.endsWith(left.slice(-7));
 }
 
+function hostMatchesPlatform(url: string | null | undefined, platform: CitationPlatformResult["platform"]) {
+  if (!url) return false;
+  try {
+    const hostname = new URL(url).hostname.replace(/^www\./, "");
+    return PLATFORM_DOMAINS[platform].some(
+      (domain) => hostname === domain || hostname.endsWith(`.${domain}`)
+    );
+  } catch {
+    return false;
+  }
+}
+
 function normalizePlatformItem(
   platform: CitationPlatformResult["platform"],
   url: string | null,
@@ -66,17 +85,108 @@ function normalizePlatformItem(
   };
 }
 
+function platformFromSavedUrl(
+  platform: CitationPlatformResult["platform"],
+  url: string,
+  restaurant: RestaurantSeoContext
+) {
+  return normalizePlatformItem(
+    platform,
+    url,
+    {
+      name: restaurant.name,
+    },
+    restaurant
+  );
+}
+
+function cityOrLocation(restaurant: RestaurantSeoContext) {
+  const source = restaurant.location ?? restaurant.address ?? "Dubai";
+  return source.split(",").map((part) => part.trim()).filter(Boolean).at(-1) ?? source;
+}
+
+function searchQueryForPlatform(
+  platform: CitationPlatformResult["platform"],
+  restaurant: RestaurantSeoContext
+) {
+  const domains = PLATFORM_DOMAINS[platform]
+    .map((domain) => `site:${domain}`)
+    .join(" OR ");
+  return `${domains} "${restaurant.name}" "${cityOrLocation(restaurant)}"`;
+}
+
+function organicResultsFromItems(items: Record<string, unknown>[]) {
+  return items.flatMap((item) => {
+    const organicResults = item.organicResults;
+    if (Array.isArray(organicResults)) {
+      return organicResults.filter(
+        (entry): entry is Record<string, unknown> =>
+          Boolean(entry) && typeof entry === "object" && !Array.isArray(entry)
+      );
+    }
+    return [item];
+  });
+}
+
+async function discoverPlatformWithGoogleSearch(
+  platform: CitationPlatformResult["platform"],
+  restaurant: RestaurantSeoContext
+) {
+  const result = await runActor<Record<string, unknown>>(
+    env.APIFY_ACTOR_GSEARCH,
+    {
+      queries: searchQueryForPlatform(platform, restaurant),
+      resultsPerPage: 10,
+      maxPagesPerQuery: 1,
+      languageCode: "en",
+      countryCode: "ae",
+    },
+    {
+      timeoutMs: 120_000,
+      estimateCostUsd: 0.03,
+      maxItems: 1,
+      maxTotalChargeUsd: 0.5,
+      memoryMbytes: 4096,
+    }
+  );
+
+  const match = organicResultsFromItems(result.items).find((item) => {
+    const url = text(item.url) ?? text(item.link);
+    const title = text(item.title) ?? text(item.name);
+    return hostMatchesPlatform(url, platform) && looseMatch(title, restaurant.name) !== false;
+  });
+
+  const url = text(match?.url) ?? text(match?.link);
+  return {
+    platform: url
+      ? normalizePlatformItem(
+          platform,
+          url,
+          {
+            name: text(match?.title) ?? text(match?.name) ?? restaurant.name,
+          },
+          restaurant
+        )
+      : normalizePlatformItem(platform, null, null, restaurant),
+    estimatedCostUsd: result.estimatedCostUsd,
+  };
+}
+
 async function collectPlatform(
   platform: CitationPlatformResult["platform"],
   actorId: string | null | undefined,
   url: string | null,
   restaurant: RestaurantSeoContext
 ) {
-  if (!actorId) {
+  if (url && !actorId) {
     return {
-      platform: normalizePlatformItem(platform, url, null, restaurant),
+      platform: platformFromSavedUrl(platform, url, restaurant),
       estimatedCostUsd: 0,
     };
+  }
+
+  if (!actorId) {
+    return discoverPlatformWithGoogleSearch(platform, restaurant);
   }
 
   const result = await runActor<Record<string, unknown>>(
@@ -92,7 +202,7 @@ async function collectPlatform(
       timeoutMs: 90_000,
       estimateCostUsd: 0.06,
       maxItems: 1,
-      maxTotalChargeUsd: 0.07,
+      maxTotalChargeUsd: 0.5,
       memoryMbytes: 4096,
     }
   );
