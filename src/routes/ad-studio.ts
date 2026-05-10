@@ -259,7 +259,30 @@ adStudioRoute.delete("/projects/:id", async (c) => {
     const auth = c.var.auth;
     const project = await loadProjectForUser(c.req.param("id"), auth.clerkId);
     ensureAdStudioEnabled(project.restaurant);
-    await prisma.adProject.delete({ where: { id: project.id } });
+    // P1 PDPL hygiene: the FK on customers.referral_ad_project_id is
+    // ON DELETE SET NULL, but the rest of the referral_* fields
+    // (headline, body, media_url, source_url, etc.) would persist as
+    // orphaned marketing copy attached to a phone number. Clear them in
+    // the same transaction as the project delete so deletion is
+    // genuinely "tombstone everything".
+    await prisma.$transaction(async (tx) => {
+      await tx.customer.updateMany({
+        where: { referralAdProjectId: project.id },
+        data: {
+          referralCtwaClid: null,
+          referralSourceId: null,
+          referralSourceType: null,
+          referralSourceUrl: null,
+          referralHeadline: null,
+          referralBody: null,
+          referralMediaUrl: null,
+          referralCapturedAt: null,
+          // referralAdProjectId + referralCreativeId are nulled by the
+          // FK ON DELETE SET NULL when adProject.delete cascades.
+        },
+      });
+      await tx.adProject.delete({ where: { id: project.id } });
+    });
     return c.json({ ok: true });
   } catch (error) {
     return errorResponse(c, error);
@@ -966,7 +989,7 @@ adStudioRoute.post("/projects/:id/link-campaign", async (c) => {
         err.code === "P2002"
       ) {
         throw new ApiError(
-          "This ad has already been linked from another tab — refresh and try again.",
+          "Already linked. Reload to see the latest status.",
           409
         );
       }
