@@ -600,16 +600,38 @@ model Customer {
   createdAt         DateTime  @default(now()) @map("created_at")
   updatedAt         DateTime  @updatedAt @map("updated_at")
 
+  // P1 — Click-to-WhatsApp ad attribution. Captured from Meta `referral`
+  // payload on the inbound webhook. Latest non-null referral wins; we
+  // never overwrite a non-null referral with null. Promoted to typed
+  // columns so the 30-day rawPayload retention sweep doesn't wipe them.
+  referralCtwaClid    String?   @map("referral_ctwa_clid")
+  referralSourceId    String?   @map("referral_source_id")
+  referralSourceType  String?   @map("referral_source_type")
+  referralSourceUrl   String?   @map("referral_source_url") @db.Text
+  referralHeadline    String?   @map("referral_headline") @db.Text
+  referralBody        String?   @map("referral_body") @db.Text
+  referralMediaUrl    String?   @map("referral_media_url") @db.Text
+  referralCapturedAt  DateTime? @map("referral_captured_at")
+  referralAdProjectId String?   @map("referral_ad_project_id")
+  referralCreativeId  String?   @map("referral_creative_id")
+
   restaurant            Restaurant             @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   consents              CustomerConsent[]
   orders                OrderIntent[]
   messages              MessageLog[]
   whatsappConversations WhatsAppConversation[]
   whatsappMessages      WhatsAppMessage[]
+  referralAdProject     AdProject?             @relation("CustomerReferralProject", fields: [referralAdProjectId], references: [id], onDelete: SetNull)
+  referralCreative      AdCreative?            @relation("CustomerReferralCreative", fields: [referralCreativeId], references: [id], onDelete: SetNull)
 
   @@unique([restaurantId, normalizedPhone])
   @@index([restaurantId, marketingOptIn])
   @@index([restaurantId, lastOrderAt])
+  // P1 — partial indexes on referral_ad_project_id and
+  // referral_creative_id are created by raw SQL in the migration (Prisma
+  // can't express `WHERE … IS NOT NULL` natively). Intentionally NOT
+  // declared here so `prisma migrate dev` doesn't see drift and recreate
+  // them as full B-trees.
   @@map("customers")
 }
 
@@ -1142,10 +1164,11 @@ model AdProject {
   createdAt         DateTime        @default(now()) @map("created_at")
   updatedAt         DateTime        @updatedAt @map("updated_at")
 
-  restaurant    Restaurant       @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  creatives     AdCreative[]
-  exports       AdExport[]
-  liveCampaigns AdLiveCampaign[]
+  restaurant          Restaurant       @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  creatives           AdCreative[]
+  exports             AdExport[]
+  liveCampaigns       AdLiveCampaign[]
+  attributedCustomers Customer[]       @relation("CustomerReferralProject")
 
   @@index([restaurantId, status, createdAt])
   @@index([restaurantId, createdAt])
@@ -1172,15 +1195,38 @@ model AdLiveCampaign {
   createdAt          DateTime             @default(now()) @map("created_at")
   updatedAt          DateTime             @updatedAt @map("updated_at")
 
-  project        AdProject               @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  metaIntegration MetaAdsIntegration?    @relation(fields: [metaIntegrationId], references: [id], onDelete: SetNull)
-  snapshots      AdPerformanceSnapshot[]
+  project         AdProject                  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  metaIntegration MetaAdsIntegration?        @relation(fields: [metaIntegrationId], references: [id], onDelete: SetNull)
+  snapshots       AdPerformanceSnapshot[]
+  adMappings      AdLiveCampaignAdMapping[]
 
   @@unique([platform, externalCampaignId])
   @@index([projectId, status])
   @@index([projectId, launchedAt])
   @@index([metaIntegrationId, autoSync, lastSyncedAt])
   @@map("ad_live_campaigns")
+}
+
+// P1 — Maps a platform-side ad ID (Meta `source_id` on a CTWA referral)
+// to the Bustan creative variant the owner launched it with. Lets the
+// webhook resolver attribute an inbound conversation not just to a
+// project but to the specific variant. One row per (platform, externalAdId).
+model AdLiveCampaignAdMapping {
+  id             String   @id @default(cuid())
+  liveCampaignId String   @map("live_campaign_id")
+  creativeId     String?  @map("creative_id")
+  platform       String
+  externalAdId   String   @map("external_ad_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  liveCampaign AdLiveCampaign @relation(fields: [liveCampaignId], references: [id], onDelete: Cascade)
+  creative     AdCreative?    @relation(fields: [creativeId], references: [id], onDelete: SetNull)
+
+  @@unique([platform, externalAdId])
+  @@index([liveCampaignId])
+  @@index([creativeId])
+  @@map("ad_live_campaign_ad_mappings")
 }
 
 model MetaAdsIntegration {
@@ -1287,7 +1333,9 @@ model AdCreative {
   createdAt                 DateTime         @default(now()) @map("created_at")
   updatedAt                 DateTime         @updatedAt @map("updated_at")
 
-  project AdProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project             AdProject                 @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  adMappings          AdLiveCampaignAdMapping[]
+  attributedCustomers Customer[]                @relation("CustomerReferralCreative")
 
   @@unique([projectId, variant])
   @@index([projectId, status])

@@ -9,6 +9,8 @@ import {
   verifyMetaSignature,
 } from "@/lib/whatsapp-business";
 import { prisma } from "@/lib/prisma";
+import { extractCtwaReferral } from "@/lib/ctwa-referral";
+import { resolveAdProjectByMetaAdId } from "@/lib/ctwa-resolver";
 
 /**
  * H7 fix: cap webhook-supplied display names to prevent stored-XSS surfaces
@@ -99,6 +101,23 @@ async function handleInboundMessage(input: {
   const occurredAt = toWebhookDate(input.message.timestamp);
   const displayName = sanitizeDisplayName(input.contactName, fromPhone);
   const consentCommand = getWhatsAppConsentCommand(body);
+  // P1: Click-to-WhatsApp referral. Sanitized + capped here so the rest
+  // of the transaction can trust the values without re-checking. PDPL —
+  // never log headline/body in plaintext below.
+  const referral = extractCtwaReferral(input.message);
+  // P1 perf: resolve the ad project OUTSIDE the inbound transaction.
+  // The resolver is a read-only lookup that doesn't need the tx
+  // snapshot. Keeping it in the tx adds 1–2 query round-trips inside a
+  // potentially-contended row-locked transaction; pulling it out keeps
+  // the tx tight and avoids brushing against
+  // idle_in_transaction_session_timeout under retry-storm load.
+  const resolved = referral
+    ? await resolveAdProjectByMetaAdId(
+        prisma,
+        input.integration.restaurantId,
+        referral.sourceId
+      )
+    : null;
 
   await prisma.$transaction(async (tx) => {
     const customer = await tx.customer.upsert({
@@ -120,8 +139,43 @@ async function handleInboundMessage(input: {
       },
       select: {
         id: true,
+        referralCtwaClid: true,
       },
     });
+
+    // P1: capture/refresh CTWA attribution. Latest non-null referral wins
+    // when the customer comes back via a different ad. Never overwrite a
+    // non-null referral with null. Uses updateMany with a discriminating
+    // WHERE so a duplicate inbound (Meta retry, double-fanout) doesn't
+    // re-resolve the project unnecessarily.
+    if (referral && resolved) {
+      const sameAttribution = customer.referralCtwaClid === referral.ctwaClid;
+      if (!sameAttribution) {
+        await tx.customer.updateMany({
+          where: {
+            id: customer.id,
+            // Race-safe: only write if no concurrent webhook already
+            // wrote the same ctwa_clid we're about to write.
+            OR: [
+              { referralCtwaClid: null },
+              { referralCtwaClid: { not: referral.ctwaClid } },
+            ],
+          },
+          data: {
+            referralCtwaClid: referral.ctwaClid,
+            referralSourceId: referral.sourceId,
+            referralSourceType: referral.sourceType,
+            referralSourceUrl: referral.sourceUrl,
+            referralHeadline: referral.headline,
+            referralBody: referral.body,
+            referralMediaUrl: referral.mediaUrl,
+            referralCapturedAt: occurredAt,
+            referralAdProjectId: resolved.projectId,
+            referralCreativeId: resolved.creativeId,
+          },
+        });
+      }
+    }
 
     if (consentCommand) {
       await tx.customer.update({

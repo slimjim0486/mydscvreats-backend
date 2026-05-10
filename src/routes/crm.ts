@@ -44,6 +44,7 @@ import {
   sendWhatsAppTemplate,
   subscribeWhatsAppBusinessAccount,
 } from "@/lib/whatsapp-business";
+import { getRestaurantEntitlements } from "@/lib/entitlements";
 import { requireAuth } from "@/middleware/auth";
 
 const campaignSchema = z.object({
@@ -80,6 +81,10 @@ const templateSubmitSchema = z.object({
 });
 
 async function getOwnedRestaurant(restaurantId: string, clerkId: string) {
+  // P1 — also pull subscription + operatorAccount so the GET handler can
+  // compute entitlements without a second restaurant fetch. The other
+  // routes that call this helper (whatsapp-integration, campaigns, etc.)
+  // ignore the extra fields, so this is a free additive widening.
   const restaurant = await prisma.restaurant.findFirst({
     where: {
       id: restaurantId,
@@ -87,11 +92,9 @@ async function getOwnedRestaurant(restaurantId: string, clerkId: string) {
         clerkId,
       },
     },
-    select: {
-      id: true,
-      name: true,
-      slug: true,
-      whatsappNumber: true,
+    include: {
+      subscription: true,
+      operatorAccount: { include: { _count: { select: { brands: true } } } },
     },
   });
 
@@ -194,7 +197,11 @@ export const crmRoute = new Hono<{
     try {
       const restaurantId = c.req.param("restaurantId");
       const auth = c.get("auth");
-      await getOwnedRestaurant(restaurantId, auth.clerkId);
+      const ownedRestaurant = await getOwnedRestaurant(restaurantId, auth.clerkId);
+      // P1: derive entitlements from the same row we just fetched —
+      // saves a second restaurant lookup per CRM summary load.
+      const entitlements = getRestaurantEntitlements(ownedRestaurant);
+      const adStudioEnabled = entitlements.adStudioEnabled;
 
       const inactiveCutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
       const [
@@ -344,6 +351,26 @@ export const crmRoute = new Hono<{
               },
               take: 25,
             },
+            // P1: pull the customer's CTWA referral block so the inbox
+            // row can show "From: <ad headline>" with a link to the
+            // attributed Ad Studio project. We only select fields the
+            // frontend actually renders (no ctwaClid, no creativeId —
+            // they're back-end-only). We DO need at least one column to
+            // detect "has referral" since we don't expose ctwaClid;
+            // referralCapturedAt is non-null IFF referral exists.
+            customer: {
+              select: {
+                referralSourceType: true,
+                referralHeadline: true,
+                referralBody: true,
+                referralMediaUrl: true,
+                referralCapturedAt: true,
+                referralAdProjectId: true,
+                referralAdProject: {
+                  select: { id: true, name: true },
+                },
+              },
+            },
           },
         }),
       ]);
@@ -418,40 +445,66 @@ export const crmRoute = new Hono<{
           embeddedSignup: getEmbeddedSignupConfig(),
           integration,
           templates: buildTemplateLibrary(templateRecords),
-          conversations: conversations.map((conversation) => ({
-            id: conversation.id,
-            customerId: conversation.customerId,
-            customerPhone: conversation.customerPhone,
-            customerName: conversation.customerName,
-            lastMessageAt: conversation.lastMessageAt,
-            unreadCount: conversation.unreadCount,
-            latestMessage: conversation.messages[0]
-              ? {
-                  id: conversation.messages[0].id,
-                  direction: conversation.messages[0].direction,
-                  type: conversation.messages[0].type,
-                  status: conversation.messages[0].status,
-                  body: conversation.messages[0].body,
-                  createdAt: conversation.messages[0].createdAt,
-                }
-              : null,
-            messages: conversation.messages
-              .slice()
-              .reverse()
-              .map((message) => ({
-                id: message.id,
-                direction: message.direction,
-                type: message.type,
-                status: message.status,
-                body: message.body,
-                providerMessageId: message.providerMessageId,
-                sentAt: message.sentAt,
-                deliveredAt: message.deliveredAt,
-                readAt: message.readAt,
-                failedAt: message.failedAt,
-                createdAt: message.createdAt,
-              })),
-          })),
+          conversations: conversations.map((conversation) => {
+            const c = conversation.customer;
+            // referralCapturedAt is non-null IFF the referral was
+            // captured — we use it as the "has referral" sentinel
+            // because ctwaClid (the natural choice) isn't exposed
+            // to the response.
+            const hasReferral = Boolean(c?.referralCapturedAt);
+            // P1: full payload only on Pro+. Starter sees a teaser flag
+            // so we can render an upsell hint without leaking the ad
+            // headline (which is the most upgrade-driving signal).
+            const referral = hasReferral
+              ? adStudioEnabled
+                ? {
+                    sourceType: c?.referralSourceType ?? null,
+                    headline: c?.referralHeadline ?? null,
+                    body: c?.referralBody ?? null,
+                    mediaUrl: c?.referralMediaUrl ?? null,
+                    capturedAt: c?.referralCapturedAt ?? null,
+                    adProjectId: c?.referralAdProjectId ?? null,
+                    adProjectName: c?.referralAdProject?.name ?? null,
+                    teaser: false as const,
+                  }
+                : { teaser: true as const }
+              : null;
+            return {
+              id: conversation.id,
+              customerId: conversation.customerId,
+              customerPhone: conversation.customerPhone,
+              customerName: conversation.customerName,
+              lastMessageAt: conversation.lastMessageAt,
+              unreadCount: conversation.unreadCount,
+              referral,
+              latestMessage: conversation.messages[0]
+                ? {
+                    id: conversation.messages[0].id,
+                    direction: conversation.messages[0].direction,
+                    type: conversation.messages[0].type,
+                    status: conversation.messages[0].status,
+                    body: conversation.messages[0].body,
+                    createdAt: conversation.messages[0].createdAt,
+                  }
+                : null,
+              messages: conversation.messages
+                .slice()
+                .reverse()
+                .map((message) => ({
+                  id: message.id,
+                  direction: message.direction,
+                  type: message.type,
+                  status: message.status,
+                  body: message.body,
+                  providerMessageId: message.providerMessageId,
+                  sentAt: message.sentAt,
+                  deliveredAt: message.deliveredAt,
+                  readAt: message.readAt,
+                  failedAt: message.failedAt,
+                  createdAt: message.createdAt,
+                })),
+            };
+          }),
         },
       });
     } catch (error) {

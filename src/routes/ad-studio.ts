@@ -815,6 +815,20 @@ const linkCampaignSchema = z.object({
   externalCampaignId: z.string().regex(META_CAMPAIGN_ID_RX, "Campaign ID should be the numeric ID from your Ads Manager URL."),
   externalAdSetIds: z.array(z.string().regex(META_CAMPAIGN_ID_RX)).max(10).optional(),
   externalAdIds: z.array(z.string().regex(META_CAMPAIGN_ID_RX)).max(50).optional(),
+  // P1: structured per-ad → creative variant mapping. When provided, the
+  // CTWA webhook resolver attributes inbound conversations to the specific
+  // Bustan creative — not just the project. creativeId is optional; an
+  // entry with just an externalAdId still gives project-level attribution
+  // via the GIN-indexed externalAdIds[] fallback.
+  externalAds: z
+    .array(
+      z.object({
+        externalAdId: z.string().regex(META_CAMPAIGN_ID_RX),
+        creativeId: z.string().cuid().optional(),
+      })
+    )
+    .max(50)
+    .optional(),
   launchedAt: z
     .string()
     .datetime()
@@ -857,31 +871,107 @@ adStudioRoute.post("/projects/:id/link-campaign", async (c) => {
       }
     }
 
-    const live = await prisma.adLiveCampaign.upsert({
-      where: { platform_externalCampaignId: { platform: body.platform, externalCampaignId: body.externalCampaignId } },
-      create: {
-        projectId: project.id,
-        platform: body.platform,
-        externalCampaignId: body.externalCampaignId,
-        externalAdSetIds: body.externalAdSetIds ?? [],
-        externalAdIds: body.externalAdIds ?? [],
-        launchedAt: body.launchedAt ? new Date(body.launchedAt) : new Date(),
-        notes: body.notes ?? null,
-        status: "linked",
-        metaIntegrationId,
-        autoSync: metaIntegrationId !== null,
-      },
-      update: {
-        externalAdSetIds: body.externalAdSetIds ?? [],
-        externalAdIds: body.externalAdIds ?? [],
-        launchedAt: body.launchedAt ? new Date(body.launchedAt) : undefined,
-        // Use undefined (not null) so a re-link without notes preserves the prior note.
-        notes: body.notes ?? undefined,
-        // Refresh the integration link in case the owner just connected Meta.
-        metaIntegrationId: metaIntegrationId ?? undefined,
-        autoSync: metaIntegrationId !== null ? true : undefined,
-      },
-    });
+    // P1: derive the canonical externalAdIds list. If structured mappings
+    // were supplied, take their adIds plus any explicit externalAdIds the
+    // owner also passed. De-dupe so the GIN index lookup remains O(1) per
+    // entry. If creativeIds are present, they MUST belong to this project
+    // (cross-tenant attribution is rejected).
+    const structuredAds = body.externalAds ?? [];
+    if (structuredAds.length > 0) {
+      const projectCreativeIds = new Set(project.creatives.map((c) => c.id));
+      for (const m of structuredAds) {
+        if (m.creativeId && !projectCreativeIds.has(m.creativeId)) {
+          throw new ApiError(
+            `Creative ${m.creativeId} does not belong to this project.`,
+            400
+          );
+        }
+      }
+    }
+    const flatAdIds = Array.from(
+      new Set([
+        ...(body.externalAdIds ?? []),
+        ...structuredAds.map((m) => m.externalAdId),
+      ])
+    );
+
+    let live;
+    try {
+      live = await prisma.$transaction(async (tx) => {
+      const liveRow = await tx.adLiveCampaign.upsert({
+        where: { platform_externalCampaignId: { platform: body.platform, externalCampaignId: body.externalCampaignId } },
+        create: {
+          projectId: project.id,
+          platform: body.platform,
+          externalCampaignId: body.externalCampaignId,
+          externalAdSetIds: body.externalAdSetIds ?? [],
+          externalAdIds: flatAdIds,
+          launchedAt: body.launchedAt ? new Date(body.launchedAt) : new Date(),
+          notes: body.notes ?? null,
+          status: "linked",
+          metaIntegrationId,
+          autoSync: metaIntegrationId !== null,
+        },
+        update: {
+          externalAdSetIds: body.externalAdSetIds ?? [],
+          externalAdIds: flatAdIds,
+          launchedAt: body.launchedAt ? new Date(body.launchedAt) : undefined,
+          // Use undefined (not null) so a re-link without notes preserves the prior note.
+          notes: body.notes ?? undefined,
+          // Refresh the integration link in case the owner just connected Meta.
+          metaIntegrationId: metaIntegrationId ?? undefined,
+          autoSync: metaIntegrationId !== null ? true : undefined,
+        },
+      });
+
+      // P1: persist per-ad → creative mappings. Re-link replaces the
+      // existing set so a corrected mapping wins. Two-step delete:
+      //  (a) wipe this campaign's prior mappings,
+      //  (b) wipe any other same-restaurant campaign's mappings for the
+      //      adIds we're about to claim — owner-driven re-assignment of
+      //      an ad ID from one Bustan campaign to another. The unique
+      //      index is on (platform, externalAdId) so without (b) the
+      //      createMany would partially fail.
+      if (structuredAds.length > 0) {
+        await tx.adLiveCampaignAdMapping.deleteMany({
+          where: { liveCampaignId: liveRow.id },
+        });
+        await tx.adLiveCampaignAdMapping.deleteMany({
+          where: {
+            platform: body.platform,
+            externalAdId: { in: structuredAds.map((m) => m.externalAdId) },
+            liveCampaign: { project: { restaurantId: project.restaurantId } },
+          },
+        });
+        await tx.adLiveCampaignAdMapping.createMany({
+          data: structuredAds.map((m) => ({
+            liveCampaignId: liveRow.id,
+            creativeId: m.creativeId ?? null,
+            platform: body.platform,
+            externalAdId: m.externalAdId,
+          })),
+        });
+      }
+
+      return liveRow;
+      });
+    } catch (err) {
+      // P1: A double-click on Link campaign can race two transactions
+      // through the structured-mapping insert. Without this catch the
+      // unique (platform, external_ad_id) index throws P2002 and the
+      // user sees a generic 500. Map to a clean 409 so the UI can show
+      // "already linked — refresh to see the latest" instead.
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === "P2002"
+      ) {
+        throw new ApiError(
+          "This ad has already been linked from another tab — refresh and try again.",
+          409
+        );
+      }
+      throw err;
+    }
 
     return c.json({ liveCampaign: live });
   } catch (error) {
@@ -1006,6 +1096,85 @@ adStudioRoute.post("/projects/:id/report-metrics", async (c) => {
     });
 
     return c.json({ ok: true, snapshotsRecorded: rows.length, reportedAt });
+  } catch (error) {
+    return errorResponse(c, error);
+  }
+});
+
+// =============================================================================
+// P1 — CRM impact: customers, conversations, orders, revenue attributed
+// to this Ad Studio project via the CTWA referral bridge.
+// =============================================================================
+
+adStudioRoute.get("/projects/:id/crm-impact", async (c) => {
+  try {
+    const auth = c.var.auth;
+    const project = await loadProjectForUser(c.req.param("id"), auth.clerkId);
+    ensureAdStudioEnabled(project.restaurant);
+
+    // Single-roundtrip aggregation. Three queries hit the partial index
+    // on customers.referral_ad_project_id; conversations + order
+    // aggregation are scoped to the attributed customer set.
+    //
+    // We do NOT trust customer.restaurantId implicitly — we always join
+    // through the restaurant scope to defend against cross-tenant
+    // attribution writes (a malicious AdLiveCampaignAdMapping insert
+    // somehow naming another restaurant's project). Tenant isolation
+    // is enforced at write time too, but defence in depth.
+    const customerWhere = {
+      restaurantId: project.restaurantId,
+      referralAdProjectId: project.id,
+    } as const;
+
+    const [
+      customerCount,
+      conversationCount,
+      orderAggregate,
+      conversationBounds,
+    ] = await Promise.all([
+      prisma.customer.count({ where: customerWhere }),
+      prisma.whatsAppConversation.count({
+        where: {
+          restaurantId: project.restaurantId,
+          customer: customerWhere,
+        },
+      }),
+      prisma.orderIntent.aggregate({
+        where: {
+          restaurantId: project.restaurantId,
+          customer: customerWhere,
+        },
+        _count: { _all: true },
+        _sum: { totalPrice: true },
+      }),
+      prisma.whatsAppConversation.aggregate({
+        where: {
+          restaurantId: project.restaurantId,
+          customer: customerWhere,
+        },
+        // First-conversation-started uses `createdAt` (when the row was
+        // inserted on the customer's first inbound message). Most-recent-
+        // activity uses `lastMessageAt`. Conflating these — using min of
+        // lastMessageAt — would surface "first conversation = today" for
+        // a customer who started weeks ago but messaged again today.
+        _min: { createdAt: true },
+        _max: { lastMessageAt: true },
+      }),
+    ]);
+
+    return c.json({
+      impact: {
+        customers: customerCount,
+        conversations: conversationCount,
+        orders: orderAggregate._count._all,
+        revenue: orderAggregate._sum.totalPrice
+          ? Number(orderAggregate._sum.totalPrice.toString())
+          : 0,
+        currency: "AED",
+        firstConversationAt: conversationBounds._min.createdAt ?? null,
+        lastConversationAt: conversationBounds._max.lastMessageAt ?? null,
+      },
+    });
   } catch (error) {
     return errorResponse(c, error);
   }
