@@ -25,6 +25,7 @@ import {
   buildTemplateParameters,
   createWhatsAppTemplate,
   decryptAccessToken,
+  validateTemplateBody,
   encryptAccessToken,
   exchangeEmbeddedSignupCode,
   extractEmbeddedSignupCustomerAssets,
@@ -721,6 +722,19 @@ export const crmRoute = new Hono<{
 
       if (!integration?.wabaId) {
         throw new ApiError("Connect a WhatsApp Business account before submitting templates.", 400);
+      }
+
+      // M2 fix: lint the template body before posting to Meta. Catches
+      // common rejection causes (URLs in MARKETING, shouting, bad variable
+      // numbering, oversize) and surfaces them as actionable 400s instead
+      // of letting Meta reject post-submit and confuse the operator.
+      const validation = validateTemplateBody({
+        body: template.body,
+        category: template.category,
+        variables: template.variables,
+      });
+      if (!validation.ok) {
+        throw new ApiError(validation.reason, 400);
       }
 
       const accessToken = decryptAccessToken(integration.accessTokenCipher);

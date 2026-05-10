@@ -54,6 +54,122 @@ export const WHATSAPP_TEMPLATE_LIBRARY = [
 
 type TemplateName = (typeof WHATSAPP_TEMPLATE_LIBRARY)[number]["name"];
 
+/**
+ * Phase 3A M2: server-side linter that mirrors the most common reasons
+ * Meta rejects WhatsApp templates. Catching them here turns a confusing
+ * post-submit "rejected by Meta — see WhatsApp Manager" error into an
+ * actionable validation message at template create time.
+ *
+ * Rules enforced (Meta's published Template Guidelines, May 2026):
+ *  - Length 1..1024 chars
+ *  - No URLs in MARKETING category bodies (Meta auto-rejects;
+ *    URLs are only allowed in URL-button components, not the body)
+ *  - No all-caps "shouting" (3+ consecutive words in ALL CAPS, ≥4 chars
+ *    each — defends against "BIG SALE TODAY")
+ *  - No excessive punctuation (4+ consecutive ! or ?)
+ *  - No leading/trailing whitespace
+ *  - Variables must be `{{1}}, {{2}}, ...` in monotonic order with no
+ *    gaps; the count must match the declared `variables` array length.
+ *
+ * Returns a structured Result so the caller can surface the reason
+ * without re-throwing as a 500.
+ */
+export type TemplateValidationResult =
+  | { ok: true }
+  | { ok: false; reason: string };
+
+export function validateTemplateBody(input: {
+  body: string;
+  category: "MARKETING" | "UTILITY" | "AUTHENTICATION" | string;
+  variables: readonly string[];
+}): TemplateValidationResult {
+  const { body, category, variables } = input;
+  if (typeof body !== "string" || !body.trim()) {
+    return { ok: false, reason: "Template body is empty." };
+  }
+  if (body !== body.trim()) {
+    return {
+      ok: false,
+      reason: "Template body must not start or end with whitespace.",
+    };
+  }
+  if (body.length > 1024) {
+    return {
+      ok: false,
+      reason: `Template body is ${body.length} chars; Meta's limit is 1024.`,
+    };
+  }
+  if (category === "MARKETING") {
+    const urlPattern = /\b(https?:\/\/|www\.)\S+/i;
+    if (urlPattern.test(body)) {
+      return {
+        ok: false,
+        reason:
+          "MARKETING templates cannot contain URLs in the body. Use a URL button instead.",
+      };
+    }
+  }
+  if (/[!?]{4,}/.test(body)) {
+    return {
+      ok: false,
+      reason: "Template body has excessive punctuation (4+ consecutive ! or ?).",
+    };
+  }
+  // All-caps shouting: 3+ consecutive words, each ≥4 chars and entirely
+  // uppercase Latin letters. Variable placeholders ({{1}}) and short
+  // acronyms (UAE, KSA) are excluded.
+  const shouting = body.match(/(?:\b[A-Z]{4,}\b\s+){2,}\b[A-Z]{4,}\b/);
+  if (shouting) {
+    return {
+      ok: false,
+      reason: `Template body contains all-caps shouting ("${shouting[0]}"). Meta rejects templates that look like spam.`,
+    };
+  }
+  // Variable validation: extract `{{n}}` references, ensure 1..N in order.
+  const matches = Array.from(body.matchAll(/\{\{(\d+)\}\}/g));
+  const indices = matches.map((m) => Number.parseInt(m[1], 10));
+  const expected = variables.length;
+  if (expected === 0 && indices.length > 0) {
+    return {
+      ok: false,
+      reason: `Template references ${indices.length} variable(s) but declares none.`,
+    };
+  }
+  if (expected > 0) {
+    const distinct = Array.from(new Set(indices)).sort((a, b) => a - b);
+    if (distinct.length !== expected) {
+      return {
+        ok: false,
+        reason: `Template body uses ${distinct.length} distinct variable placeholders but declares ${expected}.`,
+      };
+    }
+    for (let i = 0; i < distinct.length; i++) {
+      if (distinct[i] !== i + 1) {
+        return {
+          ok: false,
+          reason: `Template variables must be {{1}}, {{2}}, … in order. Found {{${distinct[i]}}} at position ${i + 1}.`,
+        };
+      }
+    }
+  }
+  return { ok: true };
+}
+
+// Self-check: every entry in the hard-coded library must pass the linter.
+// Throws at module load if a default template would be rejected by Meta.
+for (const entry of WHATSAPP_TEMPLATE_LIBRARY) {
+  const result = validateTemplateBody({
+    body: entry.body,
+    category: entry.category,
+    variables: entry.variables,
+  });
+  if (!result.ok) {
+    throw new Error(
+      `WHATSAPP_TEMPLATE_LIBRARY entry "${entry.name}" fails policy linter: ${result.reason}`
+    );
+  }
+}
+
 export type EmbeddedSignupSessionPayload = {
   event?: string;
   type?: string;
