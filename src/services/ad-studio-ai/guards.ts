@@ -181,7 +181,8 @@ export async function enforceLinkCampaignRateLimit(restaurantId: string): Promis
 /**
  * Per-restaurant per-day cap on single-variant image regenerations.
  * Separate pool from project generation so re-shooting a variant doesn't
- * eat a user's expensive project quota.
+ * eat a user's expensive project quota. Counts BOTH providers so the
+ * total daily regen volume is bounded regardless of mix.
  */
 export async function enforceImageRegenRateLimit(restaurantId: string): Promise<void> {
   const dayStart = new Date();
@@ -190,7 +191,7 @@ export async function enforceImageRegenRateLimit(restaurantId: string): Promise<
   const used = await prisma.aiUsageLog.count({
     where: {
       restaurantId,
-      feature: "ad_studio_image",
+      feature: { in: ["ad_studio_image", "ad_studio_image_openai"] },
       createdAt: { gte: dayStart },
     },
   });
@@ -198,6 +199,33 @@ export async function enforceImageRegenRateLimit(restaurantId: string): Promise<
   if (used >= env.AD_STUDIO_REGEN_IMAGE_PER_DAY) {
     throw new ApiError(
       `Daily image regeneration limit reached (${env.AD_STUDIO_REGEN_IMAGE_PER_DAY}/day). Approve a variant or try again tomorrow.`,
+      429
+    );
+  }
+}
+
+/**
+ * Sub-cap on OpenAI (GPT Image) regenerations specifically. GPT Image
+ * is best-in-class for food photography but ~5x the per-image cost of
+ * Gemini, so a separate tighter cap keeps a single restaurant from
+ * eating the global USD budget. Gemini regens still count against the
+ * broader image regen cap but not this one.
+ */
+export async function enforceOpenAiRegenRateLimit(restaurantId: string): Promise<void> {
+  const dayStart = new Date();
+  dayStart.setUTCHours(0, 0, 0, 0);
+
+  const used = await prisma.aiUsageLog.count({
+    where: {
+      restaurantId,
+      feature: "ad_studio_image_openai",
+      createdAt: { gte: dayStart },
+    },
+  });
+
+  if (used >= env.AD_STUDIO_OPENAI_REGEN_PER_DAY) {
+    throw new ApiError(
+      `Daily GPT Image regeneration limit reached (${env.AD_STUDIO_OPENAI_REGEN_PER_DAY}/day). Switch to Gemini or try again tomorrow.`,
       429
     );
   }
@@ -215,7 +243,7 @@ export async function isGlobalBudgetExhausted(): Promise<boolean> {
 
   const aggregate = await prisma.aiUsageLog.aggregate({
     where: {
-      feature: { in: ["ad_studio_project", "ad_studio_image"] },
+      feature: { in: ["ad_studio_project", "ad_studio_image", "ad_studio_image_openai"] },
       createdAt: { gte: dayStart },
     },
     _sum: { costUsd: true },

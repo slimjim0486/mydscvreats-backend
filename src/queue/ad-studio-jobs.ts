@@ -31,6 +31,9 @@ export interface AdStudioJobData {
 
 export interface AdStudioRegenImageJobData {
   creativeId: string;
+  /** Operator-selected image provider. Defaults to gemini if omitted
+   *  (older queued jobs without this field still work). */
+  provider?: "gemini" | "openai";
 }
 
 /** Phase 2C: per-live-campaign Meta Insights sync. */
@@ -289,6 +292,7 @@ async function processAdStudioJob(job: AdStudioWorkerJob) {
             heroImageUrl: out.hero?.url ?? null,
             heroImagePrompt: out.imagePrompt,
             heroImageSourceMenuItemId: out.hero?.menuItemImageId ?? null,
+            imageProvider: out.hero?.provider ?? null,
             status,
             safetyFlags: out.safetyFlags as unknown as Prisma.InputJsonValue,
             generationCostUsd:
@@ -309,6 +313,7 @@ async function processAdStudioJob(job: AdStudioWorkerJob) {
             heroImageUrl: out.hero?.url ?? null,
             heroImagePrompt: out.imagePrompt,
             heroImageSourceMenuItemId: out.hero?.menuItemImageId ?? null,
+            imageProvider: out.hero?.provider ?? null,
             status,
             safetyFlags: out.safetyFlags as unknown as Prisma.InputJsonValue,
           },
@@ -371,7 +376,7 @@ async function processAdStudioJob(job: AdStudioWorkerJob) {
 // =============================================================================
 
 async function processRegenImageJob(job: AdStudioRegenImageWorkerJob) {
-  const { creativeId } = job.data;
+  const { creativeId, provider } = job.data;
 
   const creative = await prisma.adCreative.findUnique({
     where: { id: creativeId },
@@ -468,6 +473,7 @@ async function processRegenImageJob(job: AdStudioRegenImageWorkerJob) {
       primaryDishId: brief.primaryDishId,
       primaryDishName: brief.primaryDishName,
       prompt: imagePrompt,
+      provider,
     });
 
     await prisma.adCreative.update({
@@ -476,13 +482,28 @@ async function processRegenImageJob(job: AdStudioRegenImageWorkerJob) {
         heroImageUrl: hero.url,
         heroImagePrompt: imagePrompt,
         heroImageSourceMenuItemId: hero.menuItemImageId ?? null,
+        imageProvider: hero.provider,
         status: "ready",
         safetyFlags: verdict.flags as unknown as Prisma.InputJsonValue,
         isEdited: true,
       },
     });
 
-    await logAiUsage(project.restaurantId, "ad_studio_image", totals.tokensIn, totals.tokensOut, hero.costUsd);
+    // D2 fix: menu-photo reuse is free + instant; it should NOT consume
+    // the daily regen cap. Skip the usage log entirely when reuse hit.
+    // For real AI generations, tag OpenAI vs Gemini distinctly so the
+    // per-provider cap can count them independently.
+    if (hero.provider !== "menu_item") {
+      const usageFeature =
+        hero.provider === "openai" ? "ad_studio_image_openai" : "ad_studio_image";
+      await logAiUsage(
+        project.restaurantId,
+        usageFeature,
+        totals.tokensIn,
+        totals.tokensOut,
+        hero.costUsd
+      );
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     await prisma.adCreative.update({
@@ -490,7 +511,11 @@ async function processRegenImageJob(job: AdStudioRegenImageWorkerJob) {
       data: { status: "failed" },
     });
     try {
-      await logAiUsage(creative.project.restaurantId, "ad_studio_image", 0, 0, 0);
+      // SEC-6 fix: failed OpenAI regens must count against the OpenAI cap
+      // (otherwise a stream of failures bypasses the rate limit).
+      const failureFeature =
+        provider === "openai" ? "ad_studio_image_openai" : "ad_studio_image";
+      await logAiUsage(creative.project.restaurantId, failureFeature, 0, 0, 0);
     } catch {
       // Logging failure must not mask the real error
     }

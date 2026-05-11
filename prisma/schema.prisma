@@ -70,6 +70,12 @@ enum AdPerformanceSource {
   snap_api
 }
 
+enum AdImageProvider {
+  menu_item
+  gemini
+  openai
+}
+
 enum MetaAdsIntegrationStatus {
   pending
   connected
@@ -1323,6 +1329,8 @@ model AdCreative {
   heroImageUrl              String?          @map("hero_image_url")
   heroImagePrompt           String?          @map("hero_image_prompt") @db.Text
   heroImageSourceMenuItemId String?          @map("hero_image_source_menu_item_id") // If reused from menu
+  /** Which model rendered the hero image (or `menu_item` when reused). */
+  imageProvider             AdImageProvider? @map("image_provider")
   // Generation metadata
   status                    AdCreativeStatus @default(pending)
   safetyFlags               Json?            @map("safety_flags") // Array of flagged-and-fixed issues

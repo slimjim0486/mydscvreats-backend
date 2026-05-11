@@ -76,8 +76,14 @@ export interface SafetyVerdict {
   }>;
 }
 
+export type ImageProvider = "gemini" | "openai" | "menu_item";
+
 export interface ImageGenResult {
   source: "menu_item" | "ai_generated";
+  // Which model rendered the image (for billing display + UI badges).
+  // "menu_item" when reusing an existing photo; the AI provider name
+  // otherwise.
+  provider: ImageProvider;
   url: string;
   // Cost in USD; 0 when reusing existing menu image
   costUsd: number;

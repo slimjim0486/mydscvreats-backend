@@ -9,7 +9,8 @@ export type AiFeature =
   | "owner_chat"
   | "seo_analysis"
   | "ad_studio_project"
-  | "ad_studio_image";
+  | "ad_studio_image"
+  | "ad_studio_image_openai";
 
 export async function checkAiLimit(
   restaurantId: string,

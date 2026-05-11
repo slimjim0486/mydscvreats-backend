@@ -52,6 +52,7 @@ import {
   enforceGenerateRateLimit,
   enforceGlobalBudget,
   enforceImageRegenRateLimit,
+  enforceOpenAiRegenRateLimit,
   enforceExportRateLimit,
   enforceReportMetricsRateLimit,
   enforceLinkCampaignRateLimit,
@@ -1248,6 +1249,16 @@ adStudioRoute.post("/creatives/:creativeId/regenerate-image", async (c) => {
     const auth = c.var.auth;
     const creativeId = c.req.param("creativeId");
 
+    // Optional body — { provider?: "gemini" | "openai" }. Tolerate a
+    // missing or empty body (legacy clients send no body) but DO surface
+    // schema errors on a present-but-invalid provider so the operator's
+    // explicit GPT Image choice isn't silently downgraded to Gemini.
+    const rawBody = await c.req.json().catch(() => ({}));
+    const parsed = z
+      .object({ provider: z.enum(["gemini", "openai"]).optional() })
+      .parse(rawBody);
+    const provider: "gemini" | "openai" = parsed.provider ?? "gemini";
+
     const creative = await prisma.adCreative.findUnique({
       where: { id: creativeId },
       include: { project: { include: { restaurant: { select: { id: true, ownerId: true } } } } },
@@ -1256,6 +1267,20 @@ adStudioRoute.post("/creatives/:creativeId/regenerate-image", async (c) => {
 
     const restaurant = await loadRestaurantForUser(creative.project.restaurantId, auth.clerkId);
     ensureAdStudioEnabled(restaurant);
+
+    // OpenAI gating: feature is gated to Pro+ (Starter has no Ad Studio
+    // anyway), and additionally requires the API key to be configured at
+    // the platform level. This keeps the dropdown actionable in the UI
+    // and surfaces a single clean error rather than a 502 from upstream.
+    if (provider === "openai") {
+      if (!env.OPENAI_API_KEY) {
+        throw new ApiError(
+          "GPT Image is not yet enabled on this environment.",
+          503
+        );
+      }
+      await enforceOpenAiRegenRateLimit(restaurant.id);
+    }
 
     // Image regen has its own daily pool so it doesn't eat full-project quota,
     // plus shares the global USD ceiling for absolute spend control.
@@ -1271,8 +1296,8 @@ adStudioRoute.post("/creatives/:creativeId/regenerate-image", async (c) => {
       throw new ApiError("Image regeneration already in progress for this variant", 409);
     }
 
-    await enqueueRegenImage({ creativeId });
-    return c.json({ ok: true });
+    await enqueueRegenImage({ creativeId, provider });
+    return c.json({ ok: true, provider });
   } catch (error) {
     return errorResponse(c, error);
   }

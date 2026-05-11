@@ -3,23 +3,28 @@
 // Strategy (per KB §AI-vs-Human): real food photo first, AI fallback only.
 // 1. If brief has a primary dish AND that dish has a real owner_upload image, REUSE that.
 // 2. If brief has a primary dish AND has any high-confidence existing image, REUSE that.
-// 3. Otherwise, fall back to AI generation via the existing google-image service.
+// 3. Otherwise, fall back to AI generation. Provider is operator-selectable
+//    (Gemini default, GPT Image 2 alt) — gated and cost-tracked at the route.
 
 import { ApiError } from "@/lib/errors";
+import { env } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
 import { generateDishImage } from "@/services/google-image";
+import { generateOpenAiImage } from "@/services/openai-image";
 import { uploadBuffer } from "@/services/r2";
-import type { ImageGenResult } from "./types";
+import type { ImageGenResult, ImageProvider } from "./types";
 
 interface ImageGenInput {
   restaurantId: string;
   primaryDishId?: string;
   primaryDishName?: string;
   prompt: string;
+  /** Operator-selected AI provider. Falls through to Gemini if omitted. */
+  provider?: Exclude<ImageProvider, "menu_item">;
 }
 
 const AD_STUDIO_IMAGE_FOLDER = "ad-studio";
-const AI_IMAGE_COST_USD = 0.04; // Approx Imagen 3 cost; refine when invoice arrives.
+const GEMINI_IMAGE_COST_USD = 0.04; // Approx Gemini 3 Pro Image cost; refine when invoice arrives.
 
 export async function generateHeroImage(input: ImageGenInput): Promise<ImageGenResult> {
   // Step 1: Try to reuse a real owner-uploaded photo for the featured dish.
@@ -40,6 +45,7 @@ export async function generateHeroImage(input: ImageGenInput): Promise<ImageGenR
     restaurantId: input.restaurantId,
     dishName: input.primaryDishName,
     prompt: input.prompt,
+    provider: input.provider ?? "gemini",
   });
 }
 
@@ -70,6 +76,7 @@ async function tryReuseMenuItemImage(
   if (primary?.imageUrl) {
     return {
       source: "menu_item",
+      provider: "menu_item",
       url: primary.imageUrl,
       costUsd: 0,
       menuItemImageId: primary.id,
@@ -80,6 +87,7 @@ async function tryReuseMenuItemImage(
   if (item.imageUrl) {
     return {
       source: "menu_item",
+      provider: "menu_item",
       url: item.imageUrl,
       costUsd: 0,
     };
@@ -92,8 +100,29 @@ async function generateAiImage(args: {
   restaurantId: string;
   dishName: string;
   prompt: string;
+  provider: Exclude<ImageProvider, "menu_item">;
 }): Promise<ImageGenResult> {
-  // Reuse the existing google-image service. It returns { buffer, contentType, ... }.
+  if (args.provider === "openai") {
+    const generated = await generateOpenAiImage({
+      // GPT Image follows literal prompts well; combine the dish name +
+      // operator-tuned prompt rather than relying on Gemini's keyword form.
+      prompt: `Editorial food photograph of ${args.dishName}. ${args.prompt}`,
+    });
+    const uploaded = await uploadBuffer({
+      buffer: generated.buffer,
+      contentType: generated.contentType,
+      folder: AD_STUDIO_IMAGE_FOLDER,
+    });
+    return {
+      source: "ai_generated",
+      provider: "openai",
+      url: uploaded.url,
+      costUsd: env.OPENAI_IMAGE_COST_USD,
+      prompt: args.prompt,
+    };
+  }
+
+  // Default: Gemini path via the existing google-image service.
   const generated = await generateDishImage({
     name: args.dishName,
     promptModifier: args.prompt,
@@ -108,8 +137,9 @@ async function generateAiImage(args: {
 
   return {
     source: "ai_generated",
+    provider: "gemini",
     url: uploaded.url,
-    costUsd: AI_IMAGE_COST_USD,
+    costUsd: GEMINI_IMAGE_COST_USD,
     prompt: args.prompt,
   };
 }
