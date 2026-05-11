@@ -791,6 +791,19 @@ export const crmRoute = new Hono<{
       }
 
       const accessToken = decryptAccessToken(integration.accessTokenCipher);
+      const bodyExamples = (template.variables ?? []).map((varName: string) => {
+        switch (varName) {
+          case "customer_name":
+            return "Sarah";
+          case "restaurant_name":
+            return "Bustan Sample Kitchen";
+          case "promotion_title":
+            return "Weekend Brunch Special";
+          default:
+            return "Sample";
+        }
+      });
+
       const response = await createWhatsAppTemplate({
         accessToken,
         wabaId: integration.wabaId,
@@ -798,6 +811,7 @@ export const crmRoute = new Hono<{
         category: template.category,
         language: template.language,
         body: template.body,
+        bodyExamples,
       });
       const submittedAt = new Date();
       const record = await prisma.whatsAppTemplate.upsert({

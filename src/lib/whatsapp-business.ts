@@ -645,7 +645,26 @@ export async function createWhatsAppTemplate(input: {
   category: string;
   language: string;
   body: string;
+  /**
+   * One example value per `{{1}}`, `{{2}}`, ... in `body`, in order.
+   * Meta rejects templates with INVALID_FORMAT when variables are present
+   * but no example values are provided.
+   */
+  bodyExamples?: string[];
 }) {
+  const bodyComponent: {
+    type: string;
+    text: string;
+    example?: { body_text: string[][] };
+  } = {
+    type: "BODY",
+    text: input.body,
+  };
+
+  if (input.bodyExamples && input.bodyExamples.length > 0) {
+    bodyComponent.example = { body_text: [input.bodyExamples] };
+  }
+
   return graphRequest<{ id?: string; status?: string; category?: string }>(
     `/${input.wabaId}/message_templates`,
     input.accessToken,
@@ -655,12 +674,7 @@ export async function createWhatsAppTemplate(input: {
         name: input.name,
         category: input.category,
         language: input.language,
-        components: [
-          {
-            type: "BODY",
-            text: input.body,
-          },
-        ],
+        components: [bodyComponent],
       }),
     }
   );
