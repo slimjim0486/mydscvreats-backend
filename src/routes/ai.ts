@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { getRestaurantEntitlements } from "@/lib/entitlements";
+import { checkAiLimit, logAiUsage } from "@/lib/ai-usage";
 import { ApiError } from "@/lib/errors";
 import { errorResponse } from "@/lib/http";
 import {
@@ -101,6 +102,18 @@ export const aiRoute = new Hono<{
       }
 
       const entitlements = getRestaurantEntitlements(item.restaurant);
+      const usageLimit = await checkAiLimit(
+        item.restaurantId,
+        "dish_image_generation",
+        entitlements.dishImageGenerationLimit
+      );
+      if (!usageLimit.allowed) {
+        throw new ApiError(
+          `Image generation limit reached (${usageLimit.used}/${entitlements.dishImageGenerationLimit} this month).`,
+          403
+        );
+      }
+
       const promptModifier = data.promptModifier?.trim() || null;
       const image = await prisma.$transaction(async (tx) => {
         const prepared = await ensurePrimaryImageRecord(tx, item.id);
@@ -142,7 +155,7 @@ export const aiRoute = new Hono<{
         const nextSlot = getNextImageSlot(images);
 
         if (nextSlot === null) {
-          throw new ApiError("You can generate up to 3 images per menu item", 400);
+          throw new ApiError("This dish has reached the saved image variant limit", 400);
         }
 
         return tx.menuItemImage.create({
@@ -183,6 +196,7 @@ export const aiRoute = new Hono<{
         });
         await syncMenuItemImageSummary(tx, item.id);
       });
+      await logAiUsage(item.restaurantId, "dish_image_generation", 0, 0, 0.04);
 
       return c.json({
         queued: true,

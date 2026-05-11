@@ -35,7 +35,7 @@ export async function createCheckoutSession(input: {
   const priceId =
     input.plan === "starter"
       ? env.STRIPE_STARTER_PRICE_ID
-      : env.STRIPE_PRO_PRICE_ID;
+      : env.STRIPE_PRO_PRICE_ID_V2 ?? env.STRIPE_PRO_PRICE_ID;
 
   if (!priceId) {
     throw new ApiError("Missing Stripe price configuration", 503);
@@ -97,11 +97,30 @@ export async function createPortfolioCheckoutSession(input: {
     throw new ApiError("Stripe is not configured", 503);
   }
 
-  if (!env.STRIPE_PORTFOLIO_PRICE_ID) {
+  const basePriceId = env.STRIPE_PORTFOLIO_PRICE_ID_V2 ?? env.STRIPE_PORTFOLIO_PRICE_ID;
+  if (!basePriceId) {
     throw new ApiError("Missing Stripe portfolio price configuration", 503);
   }
 
   const quantity = Math.max(input.brandCount, 3);
+  const extraBrandQuantity = Math.max(quantity - 3, 0);
+  const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [
+    {
+      price: basePriceId,
+      quantity: 1,
+    },
+  ];
+
+  if (extraBrandQuantity > 0) {
+    if (!env.STRIPE_PORTFOLIO_EXTRA_BRAND_PRICE_ID) {
+      throw new ApiError("Missing Stripe portfolio extra-brand price configuration", 503);
+    }
+
+    lineItems.push({
+      price: env.STRIPE_PORTFOLIO_EXTRA_BRAND_PRICE_ID,
+      quantity: extraBrandQuantity,
+    });
+  }
 
   return client.checkout.sessions.create({
     mode: "subscription",
@@ -112,12 +131,7 @@ export async function createPortfolioCheckoutSession(input: {
       : {
           customer_email: input.customerEmail ?? undefined,
         }),
-    line_items: [
-      {
-        price: env.STRIPE_PORTFOLIO_PRICE_ID,
-        quantity,
-      },
-    ],
+    line_items: lineItems,
     success_url: input.successUrl,
     cancel_url: input.cancelUrl,
     client_reference_id: input.operatorAccountId,
@@ -173,19 +187,55 @@ export async function updatePortfolioSubscriptionQuantity(input: {
   }
 
   const subscription = await client.subscriptions.retrieve(input.stripeSubscriptionId);
-  const itemId = subscription.items.data[0]?.id;
+  const basePriceIds = [
+    env.STRIPE_PORTFOLIO_PRICE_ID_V2,
+    env.STRIPE_PORTFOLIO_PRICE_ID,
+  ].filter(Boolean);
+  const extraPriceId = env.STRIPE_PORTFOLIO_EXTRA_BRAND_PRICE_ID;
+  const baseItem = subscription.items.data.find((item) =>
+    basePriceIds.includes(item.price.id)
+  );
+  const extraItem = subscription.items.data.find((item) => item.price.id === extraPriceId);
 
-  if (!itemId) {
+  if (!baseItem) {
     throw new ApiError("Portfolio subscription item not found", 404);
   }
 
+  const brandLimit = Math.max(input.quantity, 3);
+  if (baseItem.price.id === env.STRIPE_PORTFOLIO_PRICE_ID && !extraItem) {
+    return client.subscriptions.update(input.stripeSubscriptionId, {
+      items: [
+        {
+          id: baseItem.id,
+          quantity: brandLimit,
+        },
+      ],
+      proration_behavior: "create_prorations",
+    });
+  }
+
+  const extraBrandQuantity = Math.max(brandLimit - 3, 0);
+  const items: Stripe.SubscriptionUpdateParams.Item[] = [
+    {
+      id: baseItem.id,
+      quantity: 1,
+    },
+  ];
+
+  if (extraBrandQuantity > 0) {
+    if (extraItem) {
+      items.push({ id: extraItem.id, quantity: extraBrandQuantity });
+    } else if (extraPriceId) {
+      items.push({ price: extraPriceId, quantity: extraBrandQuantity });
+    } else {
+      throw new ApiError("Missing Stripe portfolio extra-brand price configuration", 503);
+    }
+  } else if (extraItem) {
+    items.push({ id: extraItem.id, deleted: true });
+  }
+
   return client.subscriptions.update(input.stripeSubscriptionId, {
-    items: [
-      {
-        id: itemId,
-        quantity: Math.max(input.quantity, 3),
-      },
-    ],
+    items,
     proration_behavior: "create_prorations",
   });
 }

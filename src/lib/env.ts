@@ -11,6 +11,7 @@ const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   PORT: z.coerce.number().default(3001),
   ANTHROPIC_API_KEY: optionalString(),
+  SOUS_CHEF_MODEL: z.string().default("claude-3-5-haiku-20241022"),
   GEMINI_API_KEY: optionalString(),
   GOOGLE_API_KEY: optionalString(),
   IP_HASH_PEPPER: isTestEnv
@@ -72,7 +73,10 @@ const envSchema = z.object({
   META_GRAPH_API_VERSION: z.string().default("v24.0"),
   STRIPE_STARTER_PRICE_ID: optionalString(),
   STRIPE_PRO_PRICE_ID: optionalString(),
+  STRIPE_PRO_PRICE_ID_V2: optionalString(),
   STRIPE_PORTFOLIO_PRICE_ID: optionalString(),
+  STRIPE_PORTFOLIO_PRICE_ID_V2: optionalString(),
+  STRIPE_PORTFOLIO_EXTRA_BRAND_PRICE_ID: optionalString(),
   STRIPE_TRIAL_DAYS: z.coerce.number().int().positive().default(14),
   RESEND_API_KEY: optionalString(),
   RESEND_FROM_EMAIL: optionalString(z.string().email()),

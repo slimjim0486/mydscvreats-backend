@@ -6,6 +6,7 @@ import {
   getMenuAssistantUpgradeMessage,
   getRestaurantEntitlements,
 } from "@/lib/entitlements";
+import { checkAiLimit, logAiUsage } from "@/lib/ai-usage";
 import { env } from "@/lib/env";
 import { ApiError } from "@/lib/errors";
 import { errorResponse } from "@/lib/http";
@@ -97,6 +98,9 @@ const INJECTION_REFUSAL =
 
 const OFFTOPIC_REFUSAL =
   "I'm Sous Chef, your menu assistant! I can help with menu items, dietary needs, recommendations, and food questions. What would you like to know about our menu?";
+
+const SOUS_CHEF_BUSY_REPLY =
+  "Sorry, this menu's AI assistant is busy right now — please ask the restaurant directly.";
 
 type GuardResult =
   | { allowed: true }
@@ -601,6 +605,23 @@ export const chatRoute = new Hono().post("/:restaurantId", async (c) => {
       throw new ApiError(getMenuAssistantUpgradeMessage(), 403);
     }
 
+    const usageLimit = await checkAiLimit(
+      restaurantId,
+      "sous_chef_message",
+      entitlements.sousChefMonthlyLimit
+    );
+    if (!usageLimit.allowed) {
+      return c.json({ reply: SOUS_CHEF_BUSY_REPLY });
+    }
+    if (
+      entitlements.sousChefMonthlyLimit !== null &&
+      usageLimit.used >= Math.floor(entitlements.sousChefMonthlyLimit * 0.8)
+    ) {
+      console.warn(
+        `[sous-chef] restaurant ${restaurantId} has used ${usageLimit.used}/${entitlements.sousChefMonthlyLimit} monthly public chat messages`
+      );
+    }
+
     // Build the initial messages array
     // Layer 3: Wrap user messages in delimiters so Claude treats them as
     // untrusted diner input, not system instructions.
@@ -617,6 +638,8 @@ export const chatRoute = new Hono().post("/:restaurantId", async (c) => {
     ];
 
     const systemPrompt = buildSystemPrompt(restaurant);
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
 
     // Tool use loop — Claude may call tools, we execute them and feed results back
     let iterations = 0;
@@ -624,12 +647,14 @@ export const chatRoute = new Hono().post("/:restaurantId", async (c) => {
 
     while (iterations <= MAX_TOOL_ITERATIONS) {
       const response = await getClient().messages.create({
-        model: "claude-sonnet-4-20250514",
+        model: env.SOUS_CHEF_MODEL,
         max_tokens: 512,
         system: systemPrompt,
         tools: TOOLS,
         messages,
       });
+      totalInputTokens += response.usage.input_tokens;
+      totalOutputTokens += response.usage.output_tokens;
 
       // Extract any text from this response
       const textParts = response.content
@@ -674,6 +699,13 @@ export const chatRoute = new Hono().post("/:restaurantId", async (c) => {
     if (!finalText) {
       throw new ApiError("AI assistant returned an empty reply", 502);
     }
+
+    await logAiUsage(
+      restaurantId,
+      "sous_chef_message",
+      totalInputTokens,
+      totalOutputTokens
+    );
 
     return c.json({ reply: finalText });
   } catch (error) {

@@ -1060,7 +1060,7 @@ export const menuRoute = new Hono<{
       const nextSlot = getNextImageSlot(images);
 
       if (nextSlot === null) {
-        throw new ApiError("You can store up to 3 images per menu item", 400);
+        throw new ApiError("You can store up to 10 images per menu item", 400);
       }
 
       const upload = await uploadBuffer({

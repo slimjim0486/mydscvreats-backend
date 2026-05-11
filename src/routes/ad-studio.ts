@@ -47,6 +47,7 @@ import {
   syncLiveCampaignFromMeta,
 } from "@/services/meta-ads-oauth";
 import { env } from "@/lib/env";
+import { checkAiLimit } from "@/lib/ai-usage";
 import { randomBytes as nodeRandomBytes } from "node:crypto";
 import {
   enforceGenerateRateLimit,
@@ -203,16 +204,16 @@ adStudioRoute.post("/projects", async (c) => {
     const ents = ensureAdStudioEnabled(restaurant);
 
     // Per-month quota check
-    if (ents.adProjectsPerMonth !== null) {
+    if (ents.adProjectMonthlyLimit !== null) {
       const monthStart = new Date();
       monthStart.setDate(1);
       monthStart.setHours(0, 0, 0, 0);
       const created = await prisma.adProject.count({
         where: { restaurantId: restaurant.id, createdAt: { gte: monthStart } },
       });
-      if (created >= ents.adProjectsPerMonth) {
+      if (created >= ents.adProjectMonthlyLimit) {
         throw new ApiError(
-          `You've reached this month's limit of ${ents.adProjectsPerMonth} projects. Upgrade or wait until next month.`,
+          `You've reached this month's limit of ${ents.adProjectMonthlyLimit} projects. Upgrade or wait until next month.`,
           429
         );
       }
@@ -1257,7 +1258,7 @@ adStudioRoute.post("/creatives/:creativeId/regenerate-image", async (c) => {
     const parsed = z
       .object({ provider: z.enum(["gemini", "openai"]).optional() })
       .parse(rawBody);
-    const provider: "gemini" | "openai" = parsed.provider ?? "gemini";
+    let provider: "gemini" | "openai" = parsed.provider ?? "gemini";
 
     const creative = await prisma.adCreative.findUnique({
       where: { id: creativeId },
@@ -1279,7 +1280,16 @@ adStudioRoute.post("/creatives/:creativeId/regenerate-image", async (c) => {
           503
         );
       }
-      await enforceOpenAiRegenRateLimit(restaurant.id);
+      const monthlyOpenAi = await checkAiLimit(
+        restaurant.id,
+        "ad_studio_image_openai",
+        getRestaurantEntitlements(restaurant).openaiImageMonthlyLimit
+      );
+      if (monthlyOpenAi.allowed) {
+        await enforceOpenAiRegenRateLimit(restaurant.id);
+      } else {
+        provider = "gemini";
+      }
     }
 
     // Image regen has its own daily pool so it doesn't eat full-project quota,
@@ -1314,16 +1324,16 @@ adStudioRoute.post("/projects/:id/duplicate", async (c) => {
     const ents = ensureAdStudioEnabled(project.restaurant);
 
     // Honor monthly project quota
-    if (ents.adProjectsPerMonth !== null) {
+    if (ents.adProjectMonthlyLimit !== null) {
       const monthStart = new Date();
       monthStart.setDate(1);
       monthStart.setHours(0, 0, 0, 0);
       const created = await prisma.adProject.count({
         where: { restaurantId: project.restaurantId, createdAt: { gte: monthStart } },
       });
-      if (created >= ents.adProjectsPerMonth) {
+      if (created >= ents.adProjectMonthlyLimit) {
         throw new ApiError(
-          `You've reached this month's limit of ${ents.adProjectsPerMonth} projects.`,
+          `You've reached this month's limit of ${ents.adProjectMonthlyLimit} projects.`,
           429
         );
       }

@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { Hono } from "hono";
 import { z } from "zod";
 import { getRestaurantEntitlements } from "@/lib/entitlements";
-import { getAiUsageSummary, logAiUsage } from "@/lib/ai-usage";
+import { checkAiLimit, getAiUsageSummary, logAiUsage } from "@/lib/ai-usage";
 import { env } from "@/lib/env";
 import { ApiError } from "@/lib/errors";
 import { errorResponse } from "@/lib/http";
@@ -151,6 +151,18 @@ export const ownerChatRoute = new Hono<{
       );
     }
 
+    const ownerChatLimit = await checkAiLimit(
+      restaurantId,
+      "owner_chat",
+      entitlements.ownerChatMonthlyTurnLimit
+    );
+    if (!ownerChatLimit.allowed) {
+      throw new ApiError(
+        `Owner chat limit reached (${ownerChatLimit.used}/${entitlements.ownerChatMonthlyTurnLimit} this month).`,
+        403
+      );
+    }
+
     // Get menu item count for context
     const totalItems = await prisma.menuItem.count({ where: { restaurantId } });
 
@@ -213,7 +225,7 @@ export const ownerChatRoute = new Hono<{
 
           while (iterations <= MAX_TOOL_ITERATIONS) {
             const response = await client.messages.create({
-              model: "claude-sonnet-4-20250514",
+              model: env.SOUS_CHEF_MODEL,
               max_tokens: 1024,
               system: systemPrompt,
               tools: OWNER_TOOLS,

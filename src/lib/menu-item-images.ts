@@ -151,7 +151,7 @@ export async function ensurePrimaryImageRecord(
 }
 
 export function getNextImageSlot(images: Array<{ slot: number }>) {
-  for (let slot = 0; slot < 3; slot += 1) {
+  for (let slot = 0; slot < 10; slot += 1) {
     if (!images.some((image) => image.slot === slot)) {
       return slot;
     }

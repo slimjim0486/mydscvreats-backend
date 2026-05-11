@@ -6,9 +6,11 @@ export type AiFeature =
   | "tag_analysis"
   | "menu_analysis"
   | "image_enhancement"
+  | "dish_image_generation"
   | "owner_chat"
   | "seo_analysis"
   | "ad_studio_project"
+  | "sous_chef_message"
   | "ad_studio_image"
   | "ad_studio_image_openai";
 

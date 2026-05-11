@@ -19,7 +19,9 @@ export interface PlanEntitlements {
   analyticsTier: AnalyticsTier;
   imageGenerationPriority: number;
   priorityImageGeneration: boolean;
+  dishImageGenerationLimit: number | null;
   imageEnhancementLimit: number | null;
+  photoEnhancementMonthlyLimit: number | null;
   batchImageEnhancementEnabled: boolean;
   advancedPhotoStylingEnabled: boolean;
   aiDescriptionLimit: number | null;
@@ -27,8 +29,11 @@ export interface PlanEntitlements {
   aiTagAnalysisLimit: number | null;
   menuAnalysisLevel: MenuAnalysisLevel;
   analysisLimit: number | null;
+  analysisMonthlyLimit: number | null;
   seoAnalysisLimit: number | null;
   seoAnalysisDepth: SeoAnalysisDepth;
+  sousChefMonthlyLimit: number | null;
+  ownerChatMonthlyTurnLimit: number | null;
   multiBrandEnable: boolean;
   menuCloningEnabled: boolean;
   crossBrandAnalyticsEnabled: boolean;
@@ -38,6 +43,8 @@ export interface PlanEntitlements {
   // Ad Creative Studio (Phase 1)
   adStudioEnabled: boolean;
   adProjectsPerMonth: number | null;
+  adProjectMonthlyLimit: number | null;
+  openaiImageMonthlyLimit: number | null;
   adGenerationsPerProject: number;
 }
 
@@ -57,7 +64,9 @@ const PLAN_ENTITLEMENTS: Record<
     analyticsTier: "basic",
     imageGenerationPriority: 0,
     priorityImageGeneration: false,
+    dishImageGenerationLimit: 10,
     imageEnhancementLimit: 5,
+    photoEnhancementMonthlyLimit: 5,
     batchImageEnhancementEnabled: false,
     advancedPhotoStylingEnabled: false,
     aiDescriptionLimit: 5,
@@ -65,8 +74,11 @@ const PLAN_ENTITLEMENTS: Record<
     aiTagAnalysisLimit: 1,
     menuAnalysisLevel: "basic",
     analysisLimit: 1,
+    analysisMonthlyLimit: 1,
     seoAnalysisLimit: 0,
     seoAnalysisDepth: "lite",
+    sousChefMonthlyLimit: 0,
+    ownerChatMonthlyTurnLimit: 0,
     multiBrandEnable: false,
     menuCloningEnabled: false,
     crossBrandAnalyticsEnabled: false,
@@ -75,6 +87,8 @@ const PLAN_ENTITLEMENTS: Record<
     soldOutToggleEnabled: false,
     adStudioEnabled: false,
     adProjectsPerMonth: 0,
+    adProjectMonthlyLimit: 0,
+    openaiImageMonthlyLimit: 0,
     adGenerationsPerProject: 0,
   },
   pro: {
@@ -89,16 +103,21 @@ const PLAN_ENTITLEMENTS: Record<
     analyticsTier: "advanced",
     imageGenerationPriority: 10,
     priorityImageGeneration: true,
-    imageEnhancementLimit: null,
+    dishImageGenerationLimit: 300,
+    imageEnhancementLimit: 50,
+    photoEnhancementMonthlyLimit: 50,
     batchImageEnhancementEnabled: true,
     advancedPhotoStylingEnabled: true,
     aiDescriptionLimit: null,
     bulkDescriptionEnabled: true,
     aiTagAnalysisLimit: null,
     menuAnalysisLevel: "full",
-    analysisLimit: null,
+    analysisLimit: 4,
+    analysisMonthlyLimit: 4,
     seoAnalysisLimit: 2,
     seoAnalysisDepth: "full",
+    sousChefMonthlyLimit: 2000,
+    ownerChatMonthlyTurnLimit: 200,
     multiBrandEnable: false,
     menuCloningEnabled: false,
     crossBrandAnalyticsEnabled: false,
@@ -106,7 +125,9 @@ const PLAN_ENTITLEMENTS: Record<
     timeLimitedSpecialsEnabled: false,
     soldOutToggleEnabled: false,
     adStudioEnabled: true,
-    adProjectsPerMonth: null, // unlimited
+    adProjectsPerMonth: 20,
+    adProjectMonthlyLimit: 20,
+    openaiImageMonthlyLimit: 50,
     adGenerationsPerProject: 6,
   },
   portfolio: {
@@ -121,16 +142,21 @@ const PLAN_ENTITLEMENTS: Record<
     analyticsTier: "advanced",
     imageGenerationPriority: 10,
     priorityImageGeneration: true,
-    imageEnhancementLimit: null,
+    dishImageGenerationLimit: 300,
+    imageEnhancementLimit: 50,
+    photoEnhancementMonthlyLimit: 50,
     batchImageEnhancementEnabled: true,
     advancedPhotoStylingEnabled: true,
     aiDescriptionLimit: null,
     bulkDescriptionEnabled: true,
     aiTagAnalysisLimit: null,
     menuAnalysisLevel: "full",
-    analysisLimit: null,
-    seoAnalysisLimit: 10,
+    analysisLimit: 4,
+    analysisMonthlyLimit: 4,
+    seoAnalysisLimit: 4,
     seoAnalysisDepth: "full",
+    sousChefMonthlyLimit: 2000,
+    ownerChatMonthlyTurnLimit: 200,
     multiBrandEnable: true,
     menuCloningEnabled: true,
     crossBrandAnalyticsEnabled: true,
@@ -138,7 +164,9 @@ const PLAN_ENTITLEMENTS: Record<
     timeLimitedSpecialsEnabled: true,
     soldOutToggleEnabled: true,
     adStudioEnabled: true,
-    adProjectsPerMonth: null,
+    adProjectsPerMonth: 20,
+    adProjectMonthlyLimit: 20,
+    openaiImageMonthlyLimit: 50,
     adGenerationsPerProject: 6,
   },
 };
@@ -157,7 +185,9 @@ const DRAFT_ENTITLEMENTS: PlanEntitlements = {
   analyticsTier: "basic",
   imageGenerationPriority: 0,
   priorityImageGeneration: false,
+  dishImageGenerationLimit: 10,
   imageEnhancementLimit: 3,
+  photoEnhancementMonthlyLimit: 3,
   batchImageEnhancementEnabled: false,
   advancedPhotoStylingEnabled: false,
   aiDescriptionLimit: 3,
@@ -165,8 +195,11 @@ const DRAFT_ENTITLEMENTS: PlanEntitlements = {
   aiTagAnalysisLimit: 1,
   menuAnalysisLevel: "basic",
   analysisLimit: 1,
+  analysisMonthlyLimit: 1,
   seoAnalysisLimit: 0,
   seoAnalysisDepth: "lite",
+  sousChefMonthlyLimit: 0,
+  ownerChatMonthlyTurnLimit: 0,
   multiBrandEnable: false,
   menuCloningEnabled: false,
   crossBrandAnalyticsEnabled: false,
@@ -175,6 +208,8 @@ const DRAFT_ENTITLEMENTS: PlanEntitlements = {
   soldOutToggleEnabled: false,
   adStudioEnabled: false,
   adProjectsPerMonth: 0,
+  adProjectMonthlyLimit: 0,
+  openaiImageMonthlyLimit: 0,
   adGenerationsPerProject: 0,
 };
 
@@ -310,7 +345,7 @@ export function getEffectiveRestaurantBillingState(source: RestaurantPlanSource)
 }
 
 export function getMenuItemLimitMessage(limit: number) {
-  return `Starter includes up to ${limit} menu items. Upgrade to Pro for unlimited dishes.`;
+  return `This plan includes up to ${limit} menu items. Upgrade to Pro for unlimited dishes.`;
 }
 
 export function getMenuAssistantUpgradeMessage() {
