@@ -724,7 +724,10 @@ export const crmRoute = new Hono<{
             body,
             variables: libraryTemplate?.variables ?? [],
             metaTemplateId: template.id ?? null,
-            rejectionReason: template.rejected_reason ?? null,
+            rejectionReason:
+              template.rejected_reason && template.rejected_reason !== "NONE"
+                ? template.rejected_reason
+                : null,
             lastSyncedAt: syncedAt,
           },
           update: {
@@ -733,7 +736,10 @@ export const crmRoute = new Hono<{
             status: mapTemplateStatus(template.status),
             body,
             metaTemplateId: template.id ?? null,
-            rejectionReason: template.rejected_reason ?? null,
+            rejectionReason:
+              template.rejected_reason && template.rejected_reason !== "NONE"
+                ? template.rejected_reason
+                : null,
             lastSyncedAt: syncedAt,
           },
         });
