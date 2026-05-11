@@ -12,7 +12,6 @@ import {
 } from "./kb-helpers";
 import type { CountryCode, CuisineFit, FunnelStage, PlatformId } from "@/services/ad-studio";
 import type { AdStudioBrief, RestaurantBrandContext } from "./types";
-import { getUniversalSuppressionPrompt } from "./safety";
 
 // ----- XML data envelope -----
 // Wrap any user-supplied free-text in an explicit <user_data> tag so an
@@ -67,10 +66,6 @@ export function buildStrategySystemPrompt(): string {
     "Your job: given a restaurant brief, pick the BEST creative archetypes, hooks, CTAs, and copy framework",
     "from a structured knowledge base of Q2 2026 MENA restaurant marketing best practices.",
     "Always pick from the provided KB option lists; never invent IDs.",
-    "Respect every cultural rule in the suppression list below — these are non-negotiable.",
-    "",
-    "## Universal MENA suppression rules (NEVER produce):",
-    getUniversalSuppressionPrompt(),
     "",
     "## Output requirement:",
     "Call the `select_strategy` tool with your selection. Provide brief rationale (≤2 sentences).",
@@ -115,7 +110,7 @@ export function buildStrategyUserPrompt(args: {
     : "";
 
   const countryRulesBlock = ctx.countryRules
-    ? `Country: ${ctx.countryRules.country}. Currency: ${ctx.countryRules.currency} (${ctx.countryRules.decimals} decimals). Modesty: ${ctx.countryRules.modestyLevel}. Alcohol: ${ctx.countryRules.alcoholImagery}. Pork: ${ctx.countryRules.porkImagery}. Primary dialect: ${ctx.countryRules.primaryDialect}. Calorie disclosure required: ${ctx.countryRules.calorieDisclosureRequired}.`
+    ? `Country: ${ctx.countryRules.country}. Currency: ${ctx.countryRules.currency} (${ctx.countryRules.decimals} decimals). Modesty: ${ctx.countryRules.modestyLevel}. Primary dialect: ${ctx.countryRules.primaryDialect}. Calorie disclosure required: ${ctx.countryRules.calorieDisclosureRequired}.`
     : "";
 
   return [
@@ -217,17 +212,13 @@ export const STRATEGY_TOOL_SCHEMA = {
 export function buildCopySystemPrompt(): string {
   return [
     "You are the copywriter inside Bustan's Ad Creative Studio.",
-    "You write restaurant ad copy that respects every cultural and dialect rule encoded in the brief.",
+    "You write restaurant ad copy that respects the dialect rule encoded in the brief.",
     "Each variant must:",
     "  1. Stay within platform character limits provided in the brief.",
     "  2. Use the dialect specified.",
     "  3. Be specific to THE restaurant and dish — never generic.",
-    "  4. Avoid every item in the universal suppression list.",
-    "  5. Use the assigned hook template as the headline starting point.",
-    "  6. Use the assigned CTA verbatim or near-verbatim.",
-    "",
-    "## Universal MENA suppression (NEVER produce):",
-    getUniversalSuppressionPrompt(),
+    "  4. Use the assigned hook template as the headline starting point.",
+    "  5. Use the assigned CTA verbatim or near-verbatim.",
     "",
     "Call the `record_copy_variants` tool with your output.",
   ].join("\n");
@@ -341,9 +332,6 @@ export function buildImagePromptSystemPrompt(): string {
       .map((r) => `- ${r.rule}`)
       .join("\n"),
     "",
-    "## Universal MENA suppression",
-    getUniversalSuppressionPrompt(),
-    "",
     "Call the `write_image_prompt` tool with the final prompt.",
   ].join("\n");
 }
@@ -361,11 +349,8 @@ export function buildImagePromptUserPrompt(args: {
 
   const countryBlock = cRules
     ? [
-        `## Country compliance (HARD rules for the image)`,
-        `Country: ${cRules.country}.`,
-        `Modesty: ${cRules.modestyLevel}. (very_modest = covered shoulders, no bare midriff, no thighs, no cleavage, no tight bodycon, hijab-respectful framing.)`,
-        `Alcohol imagery: ${cRules.alcoholImagery}. Pork imagery: ${cRules.porkImagery}.`,
-        `Calorie disclosure required: ${cRules.calorieDisclosureRequired}.`,
+        `## Local aesthetic context`,
+        `Country: ${cRules.country}. Modesty for any human subjects: ${cRules.modestyLevel}.`,
         `Imagery clichés to avoid: ${cRules.imageryClichesToAvoid.slice(0, 4).join("; ")}.`,
       ].join("\n")
     : "";
@@ -383,7 +368,7 @@ export function buildImagePromptUserPrompt(args: {
     countryBlock,
     "",
     "Write a single dense image-gen prompt (no preamble, no JSON, ~80-150 words).",
-    "Include: subject, angle, lighting, color temperature, props, surface, mood, environmental cue, framing for 9:16, and an explicit AVOIDS clause that re-states the country compliance rules.",
+    "Include: subject, angle, lighting, color temperature, props, surface, mood, environmental cue, and framing for 9:16.",
   ].join("\n");
 }
 
