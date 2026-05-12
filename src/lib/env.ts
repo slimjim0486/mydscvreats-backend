@@ -29,7 +29,7 @@ const envSchema = z.object({
   // The prefix + min(40) keeps "placeholder" strings out without breaking
   // real keys.
   OPENAI_API_KEY: optionalString(z.string().regex(/^sk-/).min(40)),
-  OPENAI_IMAGE_MODEL: z.string().default("gpt-image-1.5"),
+  OPENAI_IMAGE_MODEL: z.string().default("gpt-image-2"),
   OPENAI_IMAGE_COST_USD: z.coerce.number().nonnegative().default(0.19),
   /** Per-restaurant daily cap for OpenAI image regenerations. Defaults to 5
    *  to bound spend during the beta period. Owners can request a higher cap

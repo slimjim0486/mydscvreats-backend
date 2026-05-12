@@ -1,7 +1,7 @@
-// OpenAI image generation (GPT Image) for Ad Studio.
+// OpenAI image generation (GPT Image 2) for Ad Studio.
 //
 // Operator-selectable provider — the dashboard regen UI lets a Pro+
-// owner pick "GPT Image" instead of the default Gemini path. GPT Image
+// owner pick "GPT Image 2" instead of the default Gemini path. GPT Image
 // is best-in-class for product / food photography per operator testing
 // but costs ~5x Gemini, so it's gated to a per-restaurant daily cap.
 //
@@ -43,21 +43,6 @@ interface OpenAiResponse {
 
 const OPENAI_IMAGE_ENDPOINT = "https://api.openai.com/v1/images/generations";
 const REQUEST_TIMEOUT_MS = 60_000;
-const DEFAULT_OPENAI_IMAGE_MODEL = "gpt-image-1.5";
-
-function getOpenAiImageModel() {
-  // `gpt-image-2` was used in early internal docs/UI copy but is not a
-  // public Images API model. Normalize it so stale Railway env vars do not
-  // keep breaking image refreshes after deploy.
-  if (env.OPENAI_IMAGE_MODEL === "gpt-image-2") {
-    console.warn(
-      `[openai-image] OPENAI_IMAGE_MODEL=gpt-image-2 is not supported; using ${DEFAULT_OPENAI_IMAGE_MODEL}`
-    );
-    return DEFAULT_OPENAI_IMAGE_MODEL;
-  }
-  return env.OPENAI_IMAGE_MODEL || DEFAULT_OPENAI_IMAGE_MODEL;
-}
-
 export async function generateOpenAiImage(
   input: OpenAiImageInput
 ): Promise<OpenAiImageResult> {
@@ -73,7 +58,7 @@ export async function generateOpenAiImage(
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  const model = getOpenAiImageModel();
+  const model = env.OPENAI_IMAGE_MODEL;
 
   let response: Response;
   try {

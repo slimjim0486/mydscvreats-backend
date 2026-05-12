@@ -4,7 +4,7 @@
 // 1. If brief has a primary dish AND that dish has a real owner_upload image, REUSE that.
 // 2. If brief has a primary dish AND has any high-confidence existing image, REUSE that.
 // 3. Otherwise, fall back to AI generation. Provider is operator-selectable
-//    (Gemini default, GPT Image alt) — gated and cost-tracked at the route.
+//    (Gemini default, GPT Image 2 alt) — gated and cost-tracked at the route.
 //
 // Callers that need visual exploration can disable the reuse step. Ad Studio
 // does this for most variants and all manual refreshes so a single menu photo
