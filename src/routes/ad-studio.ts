@@ -1310,7 +1310,12 @@ adStudioRoute.post("/creatives/:creativeId/regenerate-image", async (c) => {
     // Race-safe: only enqueue if not already generating.
     const flipped = await prisma.adCreative.updateMany({
       where: { id: creativeId, status: { not: "generating" } },
-      data: { status: "generating" },
+      data: {
+        status: "generating",
+        heroImageUrl: null,
+        heroImageSourceMenuItemId: null,
+        imageProvider: null,
+      },
     });
     if (flipped.count === 0) {
       throw new ApiError("Image regeneration already in progress for this variant", 409);

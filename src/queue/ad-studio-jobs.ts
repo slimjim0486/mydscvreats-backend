@@ -392,7 +392,12 @@ async function processRegenImageJob(job: AdStudioRegenImageWorkerJob) {
 
   await prisma.adCreative.update({
     where: { id: creativeId },
-    data: { status: "generating" },
+    data: {
+      status: "generating",
+      heroImageUrl: null,
+      heroImageSourceMenuItemId: null,
+      imageProvider: null,
+    },
   });
 
   try {
@@ -524,6 +529,9 @@ async function processRegenImageJob(job: AdStudioRegenImageWorkerJob) {
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
+    console.warn(
+      `[ad-studio regen] failed creative=${creativeId} requestedProvider=${provider} error=${message}`
+    );
     await prisma.adCreative.update({
       where: { id: creativeId },
       data: { status: "failed" },
