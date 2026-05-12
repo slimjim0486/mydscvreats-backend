@@ -31,6 +31,10 @@ const envSchema = z.object({
   OPENAI_API_KEY: optionalString(z.string().regex(/^sk-/).min(40)),
   OPENAI_IMAGE_MODEL: z.string().default("gpt-image-2"),
   OPENAI_IMAGE_COST_USD: z.coerce.number().nonnegative().default(0.19),
+  // gpt-image-1/2 high-quality renders routinely take 60–120s; raise on
+  // Railway if you see timeouts. Clamped to 5 minutes to keep a hung
+  // upstream from pinning a worker forever.
+  OPENAI_IMAGE_TIMEOUT_MS: z.coerce.number().int().positive().max(300_000).default(120_000),
   /** Per-restaurant daily cap for OpenAI image regenerations. Defaults to 5
    *  to bound spend during the beta period. Owners can request a higher cap
    *  via support; long-term, the BYOK flow will move billing off our books. */

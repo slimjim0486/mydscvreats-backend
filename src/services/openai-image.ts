@@ -42,7 +42,7 @@ interface OpenAiResponse {
 }
 
 const OPENAI_IMAGE_ENDPOINT = "https://api.openai.com/v1/images/generations";
-const REQUEST_TIMEOUT_MS = 60_000;
+
 export async function generateOpenAiImage(
   input: OpenAiImageInput
 ): Promise<OpenAiImageResult> {
@@ -56,10 +56,11 @@ export async function generateOpenAiImage(
     throw new ApiError("OpenAI image generation requires a non-empty prompt.", 400);
   }
 
+  const timeoutMs = env.OPENAI_IMAGE_TIMEOUT_MS;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   const model = env.OPENAI_IMAGE_MODEL;
-  console.log(`[openai-image] request model=${model}`);
+  console.log(`[openai-image] request model=${model} timeoutMs=${timeoutMs}`);
 
   let response: Response;
   try {
