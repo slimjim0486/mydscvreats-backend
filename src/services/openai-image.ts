@@ -59,6 +59,7 @@ export async function generateOpenAiImage(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   const model = env.OPENAI_IMAGE_MODEL;
+  console.log(`[openai-image] request model=${model}`);
 
   let response: Response;
   try {

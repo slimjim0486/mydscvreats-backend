@@ -377,6 +377,9 @@ async function processAdStudioJob(job: AdStudioWorkerJob) {
 
 async function processRegenImageJob(job: AdStudioRegenImageWorkerJob) {
   const { creativeId, provider } = job.data;
+  console.log(
+    `[ad-studio regen] worker start creative=${creativeId} requestedProvider=${provider}`
+  );
 
   const creative = await prisma.adCreative.findUnique({
     where: { id: creativeId },
@@ -484,6 +487,9 @@ async function processRegenImageJob(job: AdStudioRegenImageWorkerJob) {
       // reuse path even when the project is anchored to a menu item.
       reuseMenuItemImage: false,
     });
+    console.log(
+      `[ad-studio regen] generated creative=${creativeId} requestedProvider=${provider} actualProvider=${hero.provider}`
+    );
 
     await prisma.adCreative.update({
       where: { id: creativeId },
@@ -497,6 +503,9 @@ async function processRegenImageJob(job: AdStudioRegenImageWorkerJob) {
         isEdited: true,
       },
     });
+    console.log(
+      `[ad-studio regen] persisted creative=${creativeId} imageProvider=${hero.provider}`
+    );
 
     // D2 fix: menu-photo reuse is free + instant; it should NOT consume
     // the daily regen cap. Skip the usage log entirely when reuse hit.

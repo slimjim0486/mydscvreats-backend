@@ -1259,6 +1259,9 @@ adStudioRoute.post("/creatives/:creativeId/regenerate-image", async (c) => {
       .object({ provider: z.enum(["gemini", "openai"]).optional() })
       .parse(rawBody);
     let provider: "gemini" | "openai" = parsed.provider ?? "gemini";
+    console.log(
+      `[ad-studio regen] request creative=${creativeId} requestedProvider=${provider}`
+    );
 
     const creative = await prisma.adCreative.findUnique({
       where: { id: creativeId },
@@ -1314,6 +1317,9 @@ adStudioRoute.post("/creatives/:creativeId/regenerate-image", async (c) => {
     }
 
     await enqueueRegenImage({ creativeId, provider });
+    console.log(
+      `[ad-studio regen] enqueued creative=${creativeId} provider=${provider}`
+    );
     return c.json({ ok: true, provider });
   } catch (error) {
     return errorResponse(c, error);
