@@ -1291,7 +1291,11 @@ adStudioRoute.post("/creatives/:creativeId/regenerate-image", async (c) => {
       if (monthlyOpenAi.allowed) {
         await enforceOpenAiRegenRateLimit(restaurant.id);
       } else {
-        provider = "gemini";
+        throw new ApiError(
+          "Monthly GPT Image limit reached. Switch to Gemini or try again next month.",
+          429,
+          { used: monthlyOpenAi.used, remaining: monthlyOpenAi.remaining }
+        );
       }
     }
 
