@@ -234,6 +234,7 @@ export function buildCopySystemPrompt(): string {
     "  3. Be specific to THE restaurant and dish — never generic.",
     "  4. Use the assigned hook template as the headline starting point.",
     "  5. Use the assigned CTA verbatim or near-verbatim.",
+    "  6. Match the operator's brand voice (tone, vocabulary, register) when provided. Brand voice OVERRIDES the hook template's default tone — adapt the hook to fit the voice, never the other way around. If brand voice is missing, default to the cuisine's natural register.",
     "",
     "Call the `record_copy_variants` tool with your output.",
   ].join("\n");
@@ -262,6 +263,10 @@ export function buildCopyUserPrompt(args: {
     brief.primaryDishName
       ? `Featured dish: ${userDataBlock("name", brief.primaryDishName)} (${brief.primaryDishCurrency ?? "AED"} ${brief.primaryDishPrice ?? "?"})${brief.primaryDishDescription ? ` — ${userDataBlock("description", brief.primaryDishDescription)}` : ""}`
       : "",
+    "",
+    brief.brandVoice
+      ? `## Brand voice (HARD constraint — every variant must match this tone, vocabulary, and register; overrides hook-template default tone)\n${userDataBlock("voice", brief.brandVoice)}`
+      : `## Brand voice\n(none provided — use the cuisine's natural register)`,
     "",
     `## Selected archetypes (one per variant in order)`,
     archetypes,
@@ -336,6 +341,14 @@ export function buildImagePromptSystemPrompt(): string {
     "",
     "CRITICAL: Each variant has a DIFFERENT archetype that defines a DIFFERENT shot type. A macro 'texture close-up' is NOT the same image as a 'hand-reach pickup' or a 'POV first bite'. The archetype's signature shot is the primary anchor for your prompt — never collapse different archetypes into the same hero-plate framing.",
     "",
+    "BRAND VOICE → VISUAL REGISTER: When a brand voice is provided, translate its verbal tone into a coherent visual register and bake it into the prompt. Reference points:",
+    "  • playful / fun / energetic → vibrant saturated palette, dynamic Dutch angles or motion blur, scattered ingredients, daylight",
+    "  • refined / upscale / luxury → muted earth-tone palette, negative space, single light source, restrained styling, marble/linen/dark walnut surfaces",
+    "  • rustic / traditional / heritage → warm tungsten light, hand-thrown ceramics, natural textures, slight imperfection in plating",
+    "  • bold / loud / street → high contrast, hard shadows, neon or window-light accents, casual surfaces (paper, butcher block, foil)",
+    "  • clean / minimal / modern → soft diffuse light, monochrome or single-accent palette, geometric composition, neutral seamless backdrop",
+    "Match the spirit, not the literal words — the visual register must be consistent across surface, lighting, palette, and props.",
+    "",
     "## Cinematography rules",
     cinematographyRules
       .filter((r) => r.category !== "disqualifier")
@@ -387,6 +400,10 @@ export function buildImagePromptUserPrompt(args: {
     `Cuisine: ${args.brand.cuisineType ?? "n/a"}`,
     `Country: ${country}`,
     `Featured dish: ${userDataBlock("name", args.brief.primaryDishName ?? null) || "(use a hero dish in this cuisine)"}`,
+    "",
+    args.brief.brandVoice
+      ? `## Brand voice (translate into visual register per the system prompt — palette, lighting, surface, styling must all reflect this voice)\n${userDataBlock("voice", args.brief.brandVoice)}`
+      : "",
     "",
     `## Archetype to realize (THIS is the primary visual anchor — not a generic hero plate)`,
     `Archetype: ${archetype?.name ?? "n/a"}`,
