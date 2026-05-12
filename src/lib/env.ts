@@ -21,15 +21,15 @@ const envSchema = z.object({
   GOOGLE_IMAGE_ALLOW_FALLBACK: z.coerce.boolean().default(false),
   GOOGLE_IMAGE_FALLBACK_MODEL: optionalString(),
   // OpenAI image generation (Ad Studio operator-selectable provider).
-  // GPT Image 2 is best-in-class for product/food photography per the
-  // operator's testing; gated to Pro+ plans and to a daily per-restaurant
-  // cap. Cost defaults to $0.19/image (high-quality 1024x1024) and should
+  // GPT Image is best-in-class for product/food photography per operator
+  // testing; gated to Pro+ plans and to a daily per-restaurant cap. Cost
+  // defaults to $0.19/image (high-quality 1024x1024) and should
   // be refreshed when the first invoice arrives.
   // OpenAI keys are `sk-…` (legacy ~51 chars) or `sk-proj-…` (newer 150+).
   // The prefix + min(40) keeps "placeholder" strings out without breaking
   // real keys.
   OPENAI_API_KEY: optionalString(z.string().regex(/^sk-/).min(40)),
-  OPENAI_IMAGE_MODEL: z.string().default("gpt-image-2"),
+  OPENAI_IMAGE_MODEL: z.string().default("gpt-image-1.5"),
   OPENAI_IMAGE_COST_USD: z.coerce.number().nonnegative().default(0.19),
   /** Per-restaurant daily cap for OpenAI image regenerations. Defaults to 5
    *  to bound spend during the beta period. Owners can request a higher cap
