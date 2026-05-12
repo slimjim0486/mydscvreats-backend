@@ -120,6 +120,10 @@ export async function runAdStudioGeneration(opts: RunGenerationOptions): Promise
           primaryDishId: opts.brief.primaryDishId,
           primaryDishName: opts.brief.primaryDishName,
           prompt: imagePrompt,
+          // Keep the trusted menu photo as the first reference creative, but
+          // force AI renders for additional variants so the grid has real
+          // visual diversity instead of repeating the same source image.
+          reuseMenuItemImage: copy.variant === 1,
         });
         imageCostTotal += hero.costUsd;
       }

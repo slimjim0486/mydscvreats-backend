@@ -5,6 +5,10 @@
 // 2. If brief has a primary dish AND has any high-confidence existing image, REUSE that.
 // 3. Otherwise, fall back to AI generation. Provider is operator-selectable
 //    (Gemini default, GPT Image 2 alt) — gated and cost-tracked at the route.
+//
+// Callers that need visual exploration can disable the reuse step. Ad Studio
+// does this for most variants and all manual refreshes so a single menu photo
+// does not collapse a 6-variant creative set into 6 identical images.
 
 import { ApiError } from "@/lib/errors";
 import { env } from "@/lib/env";
@@ -21,6 +25,7 @@ interface ImageGenInput {
   prompt: string;
   /** Operator-selected AI provider. Falls through to Gemini if omitted. */
   provider?: Exclude<ImageProvider, "menu_item">;
+  reuseMenuItemImage?: boolean;
 }
 
 const AD_STUDIO_IMAGE_FOLDER = "ad-studio";
@@ -28,7 +33,7 @@ const GEMINI_IMAGE_COST_USD = 0.04; // Approx Gemini 3 Pro Image cost; refine wh
 
 export async function generateHeroImage(input: ImageGenInput): Promise<ImageGenResult> {
   // Step 1: Try to reuse a real owner-uploaded photo for the featured dish.
-  if (input.primaryDishId) {
+  if (input.reuseMenuItemImage !== false && input.primaryDishId) {
     const reused = await tryReuseMenuItemImage(input.primaryDishId, input.restaurantId);
     if (reused) return reused;
   }

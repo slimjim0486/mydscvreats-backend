@@ -1275,6 +1275,9 @@ adStudioRoute.post("/creatives/:creativeId/regenerate-image", async (c) => {
     // and surfaces a single clean error rather than a 502 from upstream.
     if (provider === "openai") {
       if (!env.OPENAI_API_KEY) {
+        console.warn(
+          `[ad-studio regen] GPT Image requested for creative ${creativeId}, but OPENAI_API_KEY is not configured`
+        );
         throw new ApiError(
           "GPT Image is not yet enabled on this environment.",
           503

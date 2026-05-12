@@ -480,6 +480,9 @@ async function processRegenImageJob(job: AdStudioRegenImageWorkerJob) {
       primaryDishName: brief.primaryDishName,
       prompt: imagePrompt,
       provider,
+      // Manual refresh means "make a new image", so bypass the real-photo
+      // reuse path even when the project is anchored to a menu item.
+      reuseMenuItemImage: false,
     });
 
     await prisma.adCreative.update({
