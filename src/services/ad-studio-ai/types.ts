@@ -42,8 +42,9 @@ export interface StrategyDecision {
   hookIds: string[];           // 3 KB hook ids
   ctaIds: string[];            // 2 KB cta ids
   copyFrameworkId: string;     // 1 KB copy framework id
-  // Per-archetype image direction (concise prompt for image gen)
-  imageDirection: string;
+  // Per-archetype image directions — one entry per archetypeId so each variant
+  // gets a visually distinct hero shot brief, not a shared "hero plate" default.
+  imageDirections: Array<{ archetypeId: string; direction: string }>;
   // Dialect choice for the creative — derived from country + audience
   dialect: "khaleeji" | "egyptian" | "levantine" | "msa" | "arabizi" | "english" | "bilingual";
   // Reasoning trace (for audit / debug; never shown to end user)

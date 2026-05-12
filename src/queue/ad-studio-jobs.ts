@@ -421,7 +421,13 @@ async function processRegenImageJob(job: AdStudioRegenImageWorkerJob) {
         hookIds: creative.hookId ? [creative.hookId] : [],
         ctaIds: creative.ctaId ? [creative.ctaId] : [],
         copyFrameworkId: creative.copyFrameworkId ?? "aida",
-        imageDirection: "Re-shoot the same archetype with the same dish — vary lighting, props, or angle for visual freshness.",
+        imageDirections: [
+          {
+            archetypeId: creative.archetypeId,
+            direction:
+              "Re-shoot the same archetype with the same dish — vary lighting, props, or angle for visual freshness.",
+          },
+        ],
         dialect: "bilingual",
         rationale: "regen",
       },

@@ -153,7 +153,8 @@ export function buildStrategyUserPrompt(args: {
     `## Your task`,
     `Pick the 3 best archetypes, 3 best hooks, 2 best CTAs, and 1 best copy framework.`,
     `Recommend the dialect to use for the creative.`,
-    `Describe a single image direction (1-2 sentences) describing the hero shot — angle, lighting, props, mood — using KB cinematography rules.`,
+    `Write ONE image direction per chosen archetype — in the SAME order as archetypeIds.`,
+    `Each direction MUST realize that archetype's signature shot (e.g. "texture_close_up_loop" → 65mm macro on plate, no environment; "hand_reach_pickup" → static frame, hand entering to lift a piece; "pov_first_bite" → first-person bringing-to-camera). Vary lens, angle, framing, and staging between entries — never describe the same hero plate twice.`,
   ].filter(Boolean).join("\n");
 }
 
@@ -192,16 +193,30 @@ export const STRATEGY_TOOL_SCHEMA = {
         type: "string",
         enum: ["khaleeji", "egyptian", "levantine", "msa", "arabizi", "english", "bilingual"],
       },
-      imageDirection: {
-        type: "string",
-        description: "1-2 sentences describing the hero shot — angle, lighting, props, mood.",
+      imageDirections: {
+        type: "array",
+        description: "ONE entry per archetypeId, in the SAME order. Each direction MUST realize that archetype's signature shot — never reuse the same hero framing across entries.",
+        minItems: 1,
+        maxItems: 3,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["archetypeId", "direction"],
+          properties: {
+            archetypeId: { type: "string", description: "Must match one of the chosen archetypeIds." },
+            direction: {
+              type: "string",
+              description: "1-2 sentences describing THIS archetype's hero shot — explicit camera angle, framing, props, mood. MUST be visually distinct from the other directions (different angle, lens, framing, or staging).",
+            },
+          },
+        },
       },
       rationale: {
         type: "string",
         description: "1-2 sentences on why these choices fit the brief.",
       },
     },
-    required: ["archetypeIds", "hookIds", "ctaIds", "copyFrameworkId", "dialect", "imageDirection", "rationale"],
+    required: ["archetypeIds", "hookIds", "ctaIds", "copyFrameworkId", "dialect", "imageDirections", "rationale"],
   },
 } as const;
 
@@ -319,6 +334,8 @@ export function buildImagePromptSystemPrompt(): string {
     "Aim for a 1080×1920 (9:16) hero shot.",
     "Cuisine and country aesthetic must be honored.",
     "",
+    "CRITICAL: Each variant has a DIFFERENT archetype that defines a DIFFERENT shot type. A macro 'texture close-up' is NOT the same image as a 'hand-reach pickup' or a 'POV first bite'. The archetype's signature shot is the primary anchor for your prompt — never collapse different archetypes into the same hero-plate framing.",
+    "",
     "## Cinematography rules",
     cinematographyRules
       .filter((r) => r.category !== "disqualifier")
@@ -339,13 +356,23 @@ export function buildImagePromptSystemPrompt(): string {
 export function buildImagePromptUserPrompt(args: {
   brand: RestaurantBrandContext;
   brief: AdStudioBrief;
-  strategy: { archetypeIds: string[]; imageDirection: string };
+  strategy: { archetypeIds: string[]; imageDirections: Array<{ archetypeId: string; direction: string }> };
   variantArchetypeId: string;
   variant: { headline: string; primaryText: string };
 }): string {
   const archetype = creativeArchetypes.find((a) => a.id === args.variantArchetypeId);
   const country = args.brief.countries[0];
   const cRules = countryRules.find((r) => r.country === country);
+
+  // Match the strategist's per-archetype direction. Fallback: first entry, then empty.
+  const matchedDirection =
+    args.strategy.imageDirections.find((d) => d.archetypeId === args.variantArchetypeId)?.direction ??
+    args.strategy.imageDirections[0]?.direction ??
+    "";
+
+  const shotSequence = archetype?.bRollShots?.length
+    ? archetype.bRollShots.map((s) => `- ${s}`).join("\n")
+    : "- (no shot list provided — derive from archetype name)";
 
   const countryBlock = cRules
     ? [
@@ -360,15 +387,23 @@ export function buildImagePromptUserPrompt(args: {
     `Cuisine: ${args.brand.cuisineType ?? "n/a"}`,
     `Country: ${country}`,
     `Featured dish: ${userDataBlock("name", args.brief.primaryDishName ?? null) || "(use a hero dish in this cuisine)"}`,
-    `Archetype for THIS variant: ${archetype?.name ?? "n/a"}. Why: ${archetype?.why ?? ""}`,
-    `Required angle: derive from KB rules for the cuisine type AND archetype.`,
-    `Direction from strategist: ${xmlSafe(args.strategy.imageDirection)}`,
+    "",
+    `## Archetype to realize (THIS is the primary visual anchor — not a generic hero plate)`,
+    `Archetype: ${archetype?.name ?? "n/a"}`,
+    `Why this archetype works: ${archetype?.why ?? ""}`,
+    `Signature shot sequence — your image MUST visually be a still frame from this sequence:`,
+    shotSequence,
+    "",
+    `## Direction tailored to this archetype`,
+    xmlSafe(matchedDirection) || "(no per-archetype direction — derive from shot sequence above)",
+    "",
     `Headline this image must visually support: ${userDataBlock("headline", args.variant.headline)}`,
     "",
     countryBlock,
     "",
     "Write a single dense image-gen prompt (no preamble, no JSON, ~80-150 words).",
-    "Include: subject, angle, lighting, color temperature, props, surface, mood, environmental cue, and framing for 9:16.",
+    "Include: subject, angle, lens (35mm/65mm/85mm), lighting, color temperature, props, surface, mood, environmental cue, and 9:16 framing.",
+    "The prompt MUST reflect the archetype's signature shot — if the archetype is a macro texture loop, write a macro; if it's a hand-reach pickup, the hand must be in the frame; do NOT default to a generic top-down plated hero.",
   ].join("\n");
 }
 
