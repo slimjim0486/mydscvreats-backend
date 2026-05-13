@@ -6,6 +6,8 @@ import { env } from "@/lib/env";
 import { startMenuImageWorker } from "@/queue/image-generation";
 import { startAdStudioWorker } from "@/queue/ad-studio-jobs";
 import { startWhatsAppRetentionWorker } from "@/queue/whatsapp-retention";
+import { startOwnerChatMemoryWorker } from "@/queue/owner-chat-memory";
+import { startOwnerWhisperWorker } from "@/queue/owner-whisper";
 import { adStudioRoute, adStudioPublicRoute } from "@/routes/ad-studio";
 import { analyticsRoute } from "@/routes/analytics";
 import { auditRoute } from "@/routes/audit";
@@ -106,4 +108,20 @@ startWhatsAppRetentionWorker()
   })
   .catch((error) => {
     console.error("pg-boss whatsapp-retention worker failed to start", error);
+  });
+
+startOwnerChatMemoryWorker()
+  .then(() => {
+    console.log("pg-boss owner-chat-memory worker started");
+  })
+  .catch((error) => {
+    console.error("pg-boss owner-chat-memory worker failed to start", error);
+  });
+
+startOwnerWhisperWorker()
+  .then(() => {
+    console.log("pg-boss owner-whisper worker started");
+  })
+  .catch((error) => {
+    console.error("pg-boss owner-whisper worker failed to start", error);
   });

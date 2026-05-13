@@ -8,11 +8,46 @@ export type AiFeature =
   | "image_enhancement"
   | "dish_image_generation"
   | "owner_chat"
+  | "owner_chat_extraction"
+  | "owner_chat_whisper"
   | "seo_analysis"
   | "ad_studio_project"
   | "sous_chef_message"
   | "ad_studio_image"
   | "ad_studio_image_openai";
+
+const TOKEN_PRICING_USD = {
+  haiku: {
+    input: 0.0000008,
+    output: 0.000004,
+  },
+  sonnet: {
+    input: 0.000003,
+    output: 0.000015,
+  },
+} as const;
+
+function getTokenPricing(feature: AiFeature) {
+  switch (feature) {
+    case "owner_chat":
+    case "owner_chat_extraction":
+    case "owner_chat_whisper":
+    case "sous_chef_message":
+      return TOKEN_PRICING_USD.haiku;
+    default:
+      return TOKEN_PRICING_USD.sonnet;
+  }
+}
+
+export function estimateAiUsageCost(
+  feature: AiFeature,
+  tokensIn: number,
+  tokensOut: number,
+  extraCostUsd = 0
+) {
+  const pricing = getTokenPricing(feature);
+  return tokensIn * pricing.input + tokensOut * pricing.output + extraCostUsd;
+}
 
 export async function checkAiLimit(
   restaurantId: string,
@@ -48,10 +83,7 @@ export async function logAiUsage(
   tokensOut: number,
   extraCostUsd = 0
 ) {
-  const costPerInputToken = 0.000003;
-  const costPerOutputToken = 0.000015;
-  const costUsd =
-    tokensIn * costPerInputToken + tokensOut * costPerOutputToken + extraCostUsd;
+  const costUsd = estimateAiUsageCost(feature, tokensIn, tokensOut, extraCostUsd);
 
   await prisma.aiUsageLog.create({
     data: {

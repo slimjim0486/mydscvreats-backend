@@ -274,6 +274,9 @@ model Restaurant {
   seoAnalyses               SeoAnalysis[]
   adProjects                AdProject[]
   metaAdsIntegration        MetaAdsIntegration?
+  ownerChatMessages         OwnerChatMessage[]
+  ownerChatMemories         OwnerChatMemory[]
+  ownerWhispers             OwnerWhisper[]
 
   @@index([ownerId])
   @@index([operatorAccountId])
@@ -1366,4 +1369,67 @@ model AdExport {
   @@index([projectId, createdAt])
   @@index([expiresAt])
   @@map("ad_exports")
+}
+
+// =============================================================================
+// SOUS CHEF — Owner chat persistence, long-term memory, daily Whisper briefings
+// =============================================================================
+
+model OwnerChatMessage {
+  id           String   @id @default(cuid())
+  restaurantId String   @map("restaurant_id")
+  role         String // "user" | "assistant" | "system"
+  content      String   @db.Text
+  toolCalls    Json?    @map("tool_calls") // serialized tool_use blocks
+  toolResults  Json?    @map("tool_results") // serialized tool_result blocks
+  authorUserId String?  @map("author_user_id") // clerkId for user messages; null otherwise
+  source       String   @default("chat") // "chat" | "whisper" | "system"
+  whisperId    String?  @map("whisper_id") // optional link back to OwnerWhisper
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  restaurant Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  whisper    OwnerWhisper? @relation(fields: [whisperId], references: [id], onDelete: SetNull)
+
+  @@index([restaurantId, createdAt])
+  @@index([whisperId])
+  @@map("owner_chat_messages")
+}
+
+model OwnerChatMemory {
+  id              String    @id @default(cuid())
+  restaurantId    String    @map("restaurant_id")
+  type            String // "preference" | "fact" | "goal" | "concern"
+  content         String    @db.Text
+  confidence      Float     @default(0.7)
+  tags            String[]  @default([])
+  sourceMessageId String?   @map("source_message_id")
+  reinforceCount  Int       @default(1) @map("reinforce_count")
+  lastReinforced  DateTime  @default(now()) @map("last_reinforced")
+  expiresAt       DateTime? @map("expires_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@index([restaurantId, lastReinforced])
+  @@index([restaurantId, type])
+  @@map("owner_chat_memories")
+}
+
+model OwnerWhisper {
+  id           String    @id @default(cuid())
+  restaurantId String    @map("restaurant_id")
+  forDate      DateTime  @map("for_date") @db.Date // local UAE date the briefing covers
+  content      String    @db.Text // markdown, 5 lines
+  metricsJson  Json      @map("metrics_json") // snapshot used to generate
+  status       String    @default("unread") // "unread" | "read" | "dismissed"
+  readAt       DateTime? @map("read_at")
+  generatedAt  DateTime  @default(now()) @map("generated_at")
+  costUsd      Float     @default(0) @map("cost_usd")
+
+  restaurant Restaurant         @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  messages   OwnerChatMessage[]
+
+  @@unique([restaurantId, forDate])
+  @@index([restaurantId, generatedAt])
+  @@map("owner_whispers")
 }

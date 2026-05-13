@@ -1,10 +1,11 @@
 import type Anthropic from "@anthropic-ai/sdk";
-import type { PlanEntitlements } from "@/lib/entitlements";
+import { getRestaurantEntitlements, type PlanEntitlements } from "@/lib/entitlements";
 import {
   createPendingAction,
   consumePendingAction,
 } from "@/lib/pending-actions";
 import { checkAiLimit, getAiUsageSummary, logAiUsage } from "@/lib/ai-usage";
+import { env } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
 import {
   enhanceSingleDescription,
@@ -364,6 +365,184 @@ export const OWNER_TOOLS: Anthropic.Tool[] = [
       required: [],
     },
   },
+
+  // ── AD STUDIO READ TOOLS ──────────────────────────────────────
+  {
+    name: "get_ad_projects_summary",
+    description:
+      "List the restaurant's Ad Studio projects with status, budget, variant count, and live-campaign link state. For portfolio owners, pass restaurant_id to query a different brand.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        restaurant_id: { type: "string", description: "Optional. Query a different brand (portfolio only)." },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_ad_campaign_performance",
+    description:
+      "Aggregate performance for a single ad project's live campaign: spend, impressions, clicks, CTR, CPC, conversions, attributed revenue over the last N days.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        project_id: { type: "string", description: "The Ad Studio project ID." },
+        days: { type: "number", description: "Lookback window in days. Default 7." },
+      },
+      required: ["project_id"],
+    },
+  },
+  {
+    name: "get_ad_attributed_customers",
+    description:
+      "List customers attributed to an Ad Studio project via the CTWA referral bridge, ordered by total spend.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        project_id: { type: "string", description: "The Ad Studio project ID." },
+        limit: { type: "number", description: "Max rows (default 10, max 50)." },
+      },
+      required: ["project_id"],
+    },
+  },
+
+  // ── CRM / CUSTOMER READ TOOLS ─────────────────────────────────
+  {
+    name: "get_crm_summary",
+    description:
+      "Customer-level summary: total customers, repeat customers, opt-in count, average order value, recent 30d active count, last broadcast date.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        restaurant_id: { type: "string", description: "Optional. Query a different brand (portfolio only)." },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_recent_customers",
+    description:
+      "List the most recently active customers with total spend, order count, opt-in status, and referral source.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        restaurant_id: { type: "string", description: "Optional. Query a different brand (portfolio only)." },
+        limit: { type: "number", description: "Max rows (default 10, max 50)." },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_inactive_customers",
+    description:
+      "Find marketing-opted-in customers whose last order was more than N days ago — the 'winback list'.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        restaurant_id: { type: "string", description: "Optional. Query a different brand (portfolio only)." },
+        days: { type: "number", description: "Days since last order (default 30)." },
+        limit: { type: "number", description: "Max rows (default 20, max 100)." },
+      },
+      required: [],
+    },
+  },
+
+  // ── ANALYTICS EXPANSION ───────────────────────────────────────
+  {
+    name: "get_engagement_breakdown",
+    description:
+      "Engagement metrics broken out by type over the last N days: menu item likes, branding clicks, WhatsApp clicks, cart orders.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        restaurant_id: { type: "string", description: "Optional. Query a different brand (portfolio only)." },
+        days: { type: "number", description: "Lookback window in days (default 7)." },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_top_paths",
+    description:
+      "List the most-viewed paths (URLs) on the restaurant's menu site over the last N days.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        restaurant_id: { type: "string", description: "Optional. Query a different brand (portfolio only)." },
+        days: { type: "number", description: "Lookback window in days (default 7)." },
+        limit: { type: "number", description: "Max paths (default 10, max 50)." },
+      },
+      required: [],
+    },
+  },
+
+  // ── SEO READ TOOLS ────────────────────────────────────────────
+  {
+    name: "get_seo_analysis",
+    description:
+      "Latest SEO analysis for the restaurant: overall score, sub-scores (GBP, on-page, rank grid, citations, reviews), status, top recommendations, last run date. Returns 'not_run' if no analysis has been started.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        restaurant_id: { type: "string", description: "Optional. Query a different brand (portfolio only)." },
+      },
+      required: [],
+    },
+  },
+
+  // ── WHATSAPP READ TOOLS ───────────────────────────────────────
+  {
+    name: "get_whatsapp_status",
+    description:
+      "WhatsApp Business API integration status: connected/disconnected, registered phone number, template count, pending replies in 24h service window, last error.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        restaurant_id: { type: "string", description: "Optional. Query a different brand (portfolio only)." },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "list_whatsapp_templates",
+    description:
+      "List WhatsApp Business API message templates with name, language, category, approval status (draft/pending/approved/rejected), and last sync.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        restaurant_id: { type: "string", description: "Optional. Query a different brand (portfolio only)." },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_broadcast_performance",
+    description:
+      "Recent broadcast campaigns: type, status, target count vs logged count, sent date. Defaults to last 30 days.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        restaurant_id: { type: "string", description: "Optional. Query a different brand (portfolio only)." },
+        days: { type: "number", description: "Lookback window in days (default 30)." },
+        limit: { type: "number", description: "Max campaigns (default 10, max 50)." },
+      },
+      required: [],
+    },
+  },
+
+  // ── WIDGET READ TOOLS ─────────────────────────────────────────
+  {
+    name: "get_widget_status",
+    description:
+      "Embeddable menu widget status: whether the entitlement is enabled, the embed iframe code, and the public menu URL.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        restaurant_id: { type: "string", description: "Optional. Query a different brand (portfolio only)." },
+      },
+      required: [],
+    },
+  },
 ];
 
 // ── Execution ──────────────────────────────────────────────────
@@ -420,6 +599,17 @@ export async function executeTool(
       "get_analytics",
       "get_dietary_tag_status",
       "get_image_status",
+      "get_ad_projects_summary",
+      "get_crm_summary",
+      "get_recent_customers",
+      "get_inactive_customers",
+      "get_engagement_breakdown",
+      "get_top_paths",
+      "get_seo_analysis",
+      "get_whatsapp_status",
+      "list_whatsapp_templates",
+      "get_broadcast_performance",
+      "get_widget_status",
     ]);
     const targetId = crossBrandTools.has(toolName)
       ? await resolveTargetRestaurantId(restaurantId, clerkId, input)
@@ -468,6 +658,45 @@ export async function executeTool(
         return await execPublishMenu(restaurantId, clerkId, input);
       case "run_menu_analysis":
         return await execRunMenuAnalysis(restaurantId, clerkId, entitlements, input);
+
+      // Ad Studio
+      case "get_ad_projects_summary":
+        return await execGetAdProjectsSummary(targetId);
+      case "get_ad_campaign_performance":
+        return await execGetAdCampaignPerformance(restaurantId, clerkId, input);
+      case "get_ad_attributed_customers":
+        return await execGetAdAttributedCustomers(restaurantId, clerkId, input);
+
+      // CRM
+      case "get_crm_summary":
+        return await execGetCrmSummary(targetId);
+      case "get_recent_customers":
+        return await execGetRecentCustomers(targetId, input);
+      case "get_inactive_customers":
+        return await execGetInactiveCustomers(targetId, input);
+
+      // Analytics expansion
+      case "get_engagement_breakdown":
+        return await execGetEngagementBreakdown(targetId, input);
+      case "get_top_paths":
+        return await execGetTopPaths(targetId, input);
+
+      // SEO
+      case "get_seo_analysis":
+        return await execGetSeoAnalysis(targetId);
+
+      // WhatsApp
+      case "get_whatsapp_status":
+        return await execGetWhatsAppStatus(targetId);
+      case "list_whatsapp_templates":
+        return await execListWhatsAppTemplates(targetId);
+      case "get_broadcast_performance":
+        return await execGetBroadcastPerformance(targetId, input);
+
+      // Widget
+      case "get_widget_status":
+        return await execGetWidgetStatus(targetId);
+
       default:
         return { content: JSON.stringify({ error: `Unknown tool: ${toolName}` }) };
     }
@@ -2015,5 +2244,653 @@ async function execRunMenuAnalysis(
       description: "Run fresh menu health analysis",
       changes: [{ label: "Action", before: null, after: `Run ${entitlements.menuAnalysisLevel} analysis` }],
     },
+  };
+}
+
+// =============================================================================
+// AD STUDIO — read tools
+// =============================================================================
+
+async function execGetAdProjectsSummary(restaurantId: string): Promise<ToolResult> {
+  const projects = await prisma.adProject.findMany({
+    where: { restaurantId },
+    orderBy: { updatedAt: "desc" },
+    take: 20,
+    select: {
+      id: true,
+      name: true,
+      campaignType: true,
+      status: true,
+      budgetAed: true,
+      durationWeeks: true,
+      updatedAt: true,
+      _count: { select: { creatives: true, liveCampaigns: true } },
+    },
+  });
+
+  return {
+    content: JSON.stringify({
+      total: projects.length,
+      projects: projects.map((p) => ({
+        id: p.id,
+        name: p.name,
+        campaignType: p.campaignType,
+        status: p.status,
+        budget: formatPrice(p.budgetAed),
+        durationWeeks: p.durationWeeks,
+        variantCount: p._count.creatives,
+        liveCampaignCount: p._count.liveCampaigns,
+        updatedAt: p.updatedAt.toISOString(),
+      })),
+    }),
+  };
+}
+
+async function execGetAdCampaignPerformance(
+  restaurantId: string,
+  clerkId: string,
+  input: Input
+): Promise<ToolResult> {
+  const projectId = String(input.project_id ?? "");
+  const days = Math.min(Math.max(Number(input.days ?? 7), 1), 90);
+
+  if (!projectId) {
+    return { content: JSON.stringify({ error: "project_id is required" }) };
+  }
+
+  // Verify project belongs to the owner's restaurants
+  const project = await prisma.adProject.findFirst({
+    where: { id: projectId, restaurant: { owner: { clerkId } } },
+    select: { id: true, name: true, restaurantId: true },
+  });
+  if (!project) {
+    return { content: JSON.stringify({ error: "Project not found or not owned by you." }) };
+  }
+
+  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+  const liveCampaigns = await prisma.adLiveCampaign.findMany({
+    where: { projectId },
+    select: {
+      id: true,
+      platform: true,
+      status: true,
+      launchedAt: true,
+      lastSyncedAt: true,
+    },
+  });
+
+  const snapshots = await prisma.adPerformanceSnapshot.findMany({
+    where: {
+      liveCampaign: { projectId },
+      reportedAt: { gte: cutoff },
+    },
+    select: {
+      spendAed: true,
+      impressions: true,
+      reach: true,
+      clicks: true,
+      conversions: true,
+      revenueAed: true,
+      source: true,
+      reportedAt: true,
+    },
+    orderBy: { reportedAt: "desc" },
+  });
+
+  const totalSpend = snapshots.reduce((s, x) => s + Number(x.spendAed ?? 0), 0);
+  const totalImpressions = snapshots.reduce((s, x) => s + x.impressions, 0);
+  const totalClicks = snapshots.reduce((s, x) => s + x.clicks, 0);
+  const totalConversions = snapshots.reduce((s, x) => s + x.conversions, 0);
+  const totalRevenue = snapshots.reduce((s, x) => s + Number(x.revenueAed ?? 0), 0);
+
+  const ctr = totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0;
+  const cpc = totalClicks > 0 ? totalSpend / totalClicks : 0;
+  const cpa = totalConversions > 0 ? totalSpend / totalConversions : 0;
+  const roas = totalSpend > 0 ? totalRevenue / totalSpend : 0;
+
+  return {
+    content: JSON.stringify({
+      project: { id: project.id, name: project.name },
+      lookbackDays: days,
+      snapshotCount: snapshots.length,
+      liveCampaigns,
+      totals: {
+        spend: formatPrice(totalSpend),
+        impressions: totalImpressions,
+        clicks: totalClicks,
+        conversions: totalConversions,
+        attributedRevenue: formatPrice(totalRevenue),
+        ctrPct: ctr.toFixed(2),
+        cpc: formatPrice(cpc),
+        cpa: totalConversions > 0 ? formatPrice(cpa) : "n/a",
+        roas: totalSpend > 0 ? roas.toFixed(2) : "n/a",
+      },
+    }),
+  };
+}
+
+async function execGetAdAttributedCustomers(
+  restaurantId: string,
+  clerkId: string,
+  input: Input
+): Promise<ToolResult> {
+  const projectId = String(input.project_id ?? "");
+  const limit = Math.min(Math.max(Number(input.limit ?? 10), 1), 50);
+
+  if (!projectId) {
+    return { content: JSON.stringify({ error: "project_id is required" }) };
+  }
+
+  const project = await prisma.adProject.findFirst({
+    where: { id: projectId, restaurant: { owner: { clerkId } } },
+    select: { id: true, name: true },
+  });
+  if (!project) {
+    return { content: JSON.stringify({ error: "Project not found or not owned by you." }) };
+  }
+
+  const customers = await prisma.customer.findMany({
+    where: { referralAdProjectId: projectId },
+    orderBy: [{ totalSpend: "desc" }, { lastOrderAt: "desc" }],
+    take: limit,
+    select: {
+      displayName: true,
+      phoneNumber: true,
+      orderCount: true,
+      totalSpend: true,
+      lastOrderAt: true,
+      marketingOptIn: true,
+    },
+  });
+
+  const totalAttributedSpend = customers.reduce(
+    (s, c) => s + Number(c.totalSpend ?? 0),
+    0
+  );
+
+  return {
+    content: JSON.stringify({
+      project: { id: project.id, name: project.name },
+      totalAttributedCustomers: customers.length,
+      totalAttributedSpend: formatPrice(totalAttributedSpend),
+      customers: customers.map((c) => ({
+        name: c.displayName,
+        phone: c.phoneNumber.slice(-4).padStart(c.phoneNumber.length, "*"),
+        orderCount: c.orderCount,
+        totalSpend: formatPrice(c.totalSpend),
+        lastOrderAt: c.lastOrderAt?.toISOString() ?? null,
+        marketingOptIn: c.marketingOptIn,
+      })),
+    }),
+  };
+}
+
+// =============================================================================
+// CRM — read tools
+// =============================================================================
+
+async function execGetCrmSummary(restaurantId: string): Promise<ToolResult> {
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+  const [
+    totalCustomers,
+    repeatCustomers,
+    optInCount,
+    active30dCount,
+    aggregateSpend,
+    lastBroadcast,
+  ] = await Promise.all([
+    prisma.customer.count({ where: { restaurantId } }),
+    prisma.customer.count({ where: { restaurantId, orderCount: { gt: 1 } } }),
+    prisma.customer.count({ where: { restaurantId, marketingOptIn: true } }),
+    prisma.customer.count({
+      where: { restaurantId, lastOrderAt: { gte: thirtyDaysAgo } },
+    }),
+    prisma.orderIntent.aggregate({
+      where: { restaurantId },
+      _sum: { totalPrice: true },
+      _count: true,
+    }),
+    prisma.campaign.findFirst({
+      where: { restaurantId },
+      orderBy: { createdAt: "desc" },
+      select: {
+        type: true,
+        name: true,
+        status: true,
+        createdAt: true,
+        loggedCount: true,
+        targetCount: true,
+      },
+    }),
+  ]);
+
+  const avgOrderValue =
+    aggregateSpend._count > 0
+      ? Number(aggregateSpend._sum.totalPrice ?? 0) / aggregateSpend._count
+      : 0;
+
+  return {
+    content: JSON.stringify({
+      totalCustomers,
+      repeatCustomers,
+      optInCount,
+      active30dCount,
+      totalOrders: aggregateSpend._count,
+      totalRevenue: formatPrice(aggregateSpend._sum.totalPrice ?? 0),
+      avgOrderValue: formatPrice(avgOrderValue),
+      lastBroadcast: lastBroadcast
+        ? {
+            name: lastBroadcast.name,
+            type: lastBroadcast.type,
+            status: lastBroadcast.status,
+            loggedCount: lastBroadcast.loggedCount,
+            targetCount: lastBroadcast.targetCount,
+            sentAt: lastBroadcast.createdAt.toISOString(),
+          }
+        : null,
+    }),
+  };
+}
+
+async function execGetRecentCustomers(
+  restaurantId: string,
+  input: Input
+): Promise<ToolResult> {
+  const limit = Math.min(Math.max(Number(input.limit ?? 10), 1), 50);
+
+  const customers = await prisma.customer.findMany({
+    where: { restaurantId },
+    orderBy: [{ lastOrderAt: "desc" }, { updatedAt: "desc" }],
+    take: limit,
+    select: {
+      displayName: true,
+      phoneNumber: true,
+      orderCount: true,
+      totalSpend: true,
+      lastOrderAt: true,
+      marketingOptIn: true,
+      referralAdProjectId: true,
+    },
+  });
+
+  return {
+    content: JSON.stringify({
+      count: customers.length,
+      customers: customers.map((c) => ({
+        name: c.displayName,
+        phone: c.phoneNumber.slice(-4).padStart(c.phoneNumber.length, "*"),
+        orderCount: c.orderCount,
+        totalSpend: formatPrice(c.totalSpend),
+        lastOrderAt: c.lastOrderAt?.toISOString() ?? null,
+        marketingOptIn: c.marketingOptIn,
+        attributedToAdProjectId: c.referralAdProjectId,
+      })),
+    }),
+  };
+}
+
+async function execGetInactiveCustomers(
+  restaurantId: string,
+  input: Input
+): Promise<ToolResult> {
+  const days = Math.min(Math.max(Number(input.days ?? 30), 7), 365);
+  const limit = Math.min(Math.max(Number(input.limit ?? 20), 1), 100);
+  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+  const customers = await prisma.customer.findMany({
+    where: {
+      restaurantId,
+      marketingOptIn: true,
+      OR: [{ lastOrderAt: { lt: cutoff } }, { lastOrderAt: null }],
+      orderCount: { gt: 0 }, // exclude prospects who never ordered
+    },
+    orderBy: [{ totalSpend: "desc" }, { lastOrderAt: "asc" }],
+    take: limit,
+    select: {
+      displayName: true,
+      phoneNumber: true,
+      orderCount: true,
+      totalSpend: true,
+      lastOrderAt: true,
+    },
+  });
+
+  return {
+    content: JSON.stringify({
+      thresholdDays: days,
+      count: customers.length,
+      customers: customers.map((c) => ({
+        name: c.displayName,
+        phone: c.phoneNumber.slice(-4).padStart(c.phoneNumber.length, "*"),
+        orderCount: c.orderCount,
+        totalSpend: formatPrice(c.totalSpend),
+        lastOrderAt: c.lastOrderAt?.toISOString() ?? null,
+        daysSinceLastOrder: c.lastOrderAt
+          ? Math.floor((Date.now() - c.lastOrderAt.getTime()) / (24 * 60 * 60 * 1000))
+          : null,
+      })),
+    }),
+  };
+}
+
+// =============================================================================
+// Analytics expansion — read tools
+// =============================================================================
+
+async function execGetEngagementBreakdown(
+  restaurantId: string,
+  input: Input
+): Promise<ToolResult> {
+  const days = Math.min(Math.max(Number(input.days ?? 7), 1), 90);
+  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+  const [likes, brandingClicks, whatsappClicks, cartOrders] = await Promise.all([
+    prisma.menuItemLike.count({
+      where: { menuItem: { restaurantId }, createdAt: { gte: cutoff } },
+    }),
+    prisma.brandingClick.count({ where: { restaurantId, createdAt: { gte: cutoff } } }),
+    prisma.whatsAppClick.count({ where: { restaurantId, createdAt: { gte: cutoff } } }),
+    prisma.whatsAppCartOrder.aggregate({
+      where: { restaurantId, createdAt: { gte: cutoff } },
+      _sum: { totalPrice: true },
+      _count: true,
+    }),
+  ]);
+
+  return {
+    content: JSON.stringify({
+      lookbackDays: days,
+      menuItemLikes: likes,
+      brandingClicks,
+      whatsappClicks,
+      cartOrders: {
+        count: cartOrders._count,
+        revenue: formatPrice(cartOrders._sum.totalPrice ?? 0),
+      },
+    }),
+  };
+}
+
+async function execGetTopPaths(
+  restaurantId: string,
+  input: Input
+): Promise<ToolResult> {
+  const days = Math.min(Math.max(Number(input.days ?? 7), 1), 90);
+  const limit = Math.min(Math.max(Number(input.limit ?? 10), 1), 50);
+  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+  const grouped = await prisma.pageView.groupBy({
+    by: ["path"],
+    where: { restaurantId, createdAt: { gte: cutoff } },
+    _count: { _all: true },
+    orderBy: { _count: { path: "desc" } },
+    take: limit,
+  });
+
+  return {
+    content: JSON.stringify({
+      lookbackDays: days,
+      paths: grouped.map((r) => ({
+        path: r.path,
+        views: r._count._all,
+      })),
+    }),
+  };
+}
+
+// =============================================================================
+// SEO — read tools
+// =============================================================================
+
+async function execGetSeoAnalysis(restaurantId: string): Promise<ToolResult> {
+  const latest = await prisma.seoAnalysis.findFirst({
+    where: { restaurantId },
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      status: true,
+      overallScore: true,
+      gbpScore: true,
+      onPageScore: true,
+      rankGridScore: true,
+      citationsScore: true,
+      reviewsScore: true,
+      recommendations: true,
+      errorMessage: true,
+      createdAt: true,
+      completedAt: true,
+    },
+  });
+
+  if (!latest) {
+    return {
+      content: JSON.stringify({
+        status: "not_run",
+        message:
+          "No SEO analysis has been run yet. Suggest the owner runs one from the SEO Analysis page.",
+      }),
+    };
+  }
+
+  // recommendations is a JSON value — try to surface the top 3 actionable lines.
+  type RecItem = { title?: string; recommendation?: string };
+  let topRecommendations: string[] = [];
+  if (latest.recommendations && typeof latest.recommendations === "object") {
+    if (Array.isArray(latest.recommendations)) {
+      topRecommendations = (latest.recommendations as RecItem[])
+        .slice(0, 3)
+        .map((r) => r.title ?? r.recommendation ?? JSON.stringify(r))
+        .filter((s): s is string => typeof s === "string" && s.length > 0);
+    } else {
+      const rec = latest.recommendations as Record<string, unknown>;
+      // Try common shapes
+      const list = (rec.priority ?? rec.top ?? rec.items ?? []) as RecItem[];
+      if (Array.isArray(list)) {
+        topRecommendations = list
+          .slice(0, 3)
+          .map((r) => r.title ?? r.recommendation ?? "")
+          .filter((s): s is string => typeof s === "string" && s.length > 0);
+      }
+    }
+  }
+
+  return {
+    content: JSON.stringify({
+      status: latest.status,
+      analysisId: latest.id,
+      overallScore: latest.overallScore,
+      subScores: {
+        googleBusinessProfile: latest.gbpScore,
+        onPage: latest.onPageScore,
+        rankGrid: latest.rankGridScore,
+        citations: latest.citationsScore,
+        reviews: latest.reviewsScore,
+      },
+      topRecommendations,
+      errorMessage: latest.errorMessage,
+      createdAt: latest.createdAt.toISOString(),
+      completedAt: latest.completedAt?.toISOString() ?? null,
+    }),
+  };
+}
+
+// =============================================================================
+// WhatsApp — read tools
+// =============================================================================
+
+async function execGetWhatsAppStatus(restaurantId: string): Promise<ToolResult> {
+  const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+  const [integration, templateCount, pendingReplies] = await Promise.all([
+    prisma.whatsAppIntegration.findUnique({
+      where: { restaurantId },
+      select: {
+        status: true,
+        displayPhoneNumber: true,
+        connectedAt: true,
+        lastWebhookAt: true,
+        lastError: true,
+      },
+    }),
+    prisma.whatsAppTemplate.count({ where: { restaurantId } }),
+    // Conversations with unread inbound messages — owner's "to-do list"
+    // within the 24h service window.
+    prisma.whatsAppConversation.count({
+      where: {
+        restaurantId,
+        unreadCount: { gt: 0 },
+        lastMessageAt: { gte: twentyFourHoursAgo },
+      },
+    }),
+  ]);
+
+  if (!integration) {
+    return {
+      content: JSON.stringify({
+        connected: false,
+        message:
+          "WhatsApp Business API is not connected. Suggest the owner connects it from Settings > WhatsApp.",
+      }),
+    };
+  }
+
+  return {
+    content: JSON.stringify({
+      connected: integration.status === "connected",
+      status: integration.status,
+      registeredPhone: integration.displayPhoneNumber,
+      connectedAt: integration.connectedAt?.toISOString() ?? null,
+      lastWebhookAt: integration.lastWebhookAt?.toISOString() ?? null,
+      templateCount,
+      pendingReplies24h: pendingReplies,
+      lastError: integration.lastError,
+    }),
+  };
+}
+
+async function execListWhatsAppTemplates(restaurantId: string): Promise<ToolResult> {
+  const templates = await prisma.whatsAppTemplate.findMany({
+    where: { restaurantId },
+    orderBy: [{ status: "asc" }, { createdAt: "desc" }],
+    take: 50,
+    select: {
+      name: true,
+      label: true,
+      category: true,
+      language: true,
+      status: true,
+      rejectionReason: true,
+      lastSyncedAt: true,
+      createdAt: true,
+    },
+  });
+
+  // Count by status for a quick summary line
+  const statusCounts: Record<string, number> = {};
+  for (const t of templates) {
+    statusCounts[t.status] = (statusCounts[t.status] ?? 0) + 1;
+  }
+
+  return {
+    content: JSON.stringify({
+      total: templates.length,
+      byStatus: statusCounts,
+      templates: templates.map((t) => ({
+        name: t.name,
+        label: t.label,
+        category: t.category,
+        language: t.language,
+        status: t.status,
+        rejectionReason: t.rejectionReason,
+        lastSyncedAt: t.lastSyncedAt?.toISOString() ?? null,
+        createdAt: t.createdAt.toISOString(),
+      })),
+    }),
+  };
+}
+
+async function execGetBroadcastPerformance(
+  restaurantId: string,
+  input: Input
+): Promise<ToolResult> {
+  const days = Math.min(Math.max(Number(input.days ?? 30), 1), 365);
+  const limit = Math.min(Math.max(Number(input.limit ?? 10), 1), 50);
+  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+  const campaigns = await prisma.campaign.findMany({
+    where: { restaurantId, createdAt: { gte: cutoff } },
+    orderBy: { createdAt: "desc" },
+    take: limit,
+    select: {
+      name: true,
+      type: true,
+      status: true,
+      templateName: true,
+      targetCount: true,
+      loggedCount: true,
+      targetSegment: true,
+      createdAt: true,
+      loggedAt: true,
+    },
+  });
+
+  return {
+    content: JSON.stringify({
+      lookbackDays: days,
+      total: campaigns.length,
+      campaigns: campaigns.map((c) => ({
+        name: c.name,
+        type: c.type,
+        status: c.status,
+        templateName: c.templateName,
+        targetSegment: c.targetSegment,
+        targetCount: c.targetCount,
+        loggedCount: c.loggedCount,
+        deliveryRate:
+          c.targetCount > 0 ? `${((c.loggedCount / c.targetCount) * 100).toFixed(1)}%` : "n/a",
+        createdAt: c.createdAt.toISOString(),
+        loggedAt: c.loggedAt?.toISOString() ?? null,
+      })),
+    }),
+  };
+}
+
+// =============================================================================
+// Widget — read tools
+// =============================================================================
+
+async function execGetWidgetStatus(restaurantId: string): Promise<ToolResult> {
+  const restaurant = await prisma.restaurant.findUnique({
+    where: { id: restaurantId },
+    include: {
+      subscription: true,
+      operatorAccount: { include: { _count: { select: { brands: true } } } },
+    },
+  });
+
+  if (!restaurant) {
+    return { content: JSON.stringify({ error: "Restaurant not found." }) };
+  }
+
+  const entitlements = getRestaurantEntitlements(restaurant);
+  const base = env.FRONTEND_APP_URL.replace(/\/$/, "");
+  const menuUrl = `${base}/m/${restaurant.slug}`;
+  const embedUrl = `${base}/embed/${restaurant.slug}`;
+  const embedCode = `<iframe src="${embedUrl}" style="width:100%;height:800px;border:0;" loading="lazy"></iframe>`;
+
+  return {
+    content: JSON.stringify({
+      enabled: entitlements.widgetEnabled,
+      plan: entitlements.plan,
+      slug: restaurant.slug,
+      menuUrl,
+      embedUrl,
+      embedCode,
+      upsellHint: entitlements.widgetEnabled
+        ? null
+        : "Widget embeds are available on Pro and Portfolio plans.",
+    }),
   };
 }
