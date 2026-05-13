@@ -46,6 +46,9 @@ export interface PlanEntitlements {
   adProjectMonthlyLimit: number | null;
   openaiImageMonthlyLimit: number | null;
   adGenerationsPerProject: number;
+  // Phase 3.1 — Google Search Console dashboard. Read-only view of GSC data
+  // sliced per restaurant from Bustan's shared GSC property.
+  gscDashboardEnabled: boolean;
 }
 
 const PLAN_ENTITLEMENTS: Record<
@@ -90,6 +93,7 @@ const PLAN_ENTITLEMENTS: Record<
     adProjectMonthlyLimit: 0,
     openaiImageMonthlyLimit: 0,
     adGenerationsPerProject: 0,
+    gscDashboardEnabled: false,
   },
   pro: {
     menuItemLimit: null,
@@ -129,6 +133,7 @@ const PLAN_ENTITLEMENTS: Record<
     adProjectMonthlyLimit: 20,
     openaiImageMonthlyLimit: 50,
     adGenerationsPerProject: 6,
+    gscDashboardEnabled: true,
   },
   portfolio: {
     menuItemLimit: null,
@@ -168,6 +173,7 @@ const PLAN_ENTITLEMENTS: Record<
     adProjectMonthlyLimit: 20,
     openaiImageMonthlyLimit: 50,
     adGenerationsPerProject: 6,
+    gscDashboardEnabled: true,
   },
 };
 
@@ -211,6 +217,7 @@ const DRAFT_ENTITLEMENTS: PlanEntitlements = {
   adProjectMonthlyLimit: 0,
   openaiImageMonthlyLimit: 0,
   adGenerationsPerProject: 0,
+  gscDashboardEnabled: false,
 };
 
 type RestaurantPlanSource =

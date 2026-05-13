@@ -101,6 +101,13 @@ const envSchema = z.object({
   // Per-(customer,template) frequency cap window in hours. A given recipient
   // cannot receive the same template more than once in this window.
   WHATSAPP_FREQUENCY_CAP_HOURS: z.coerce.number().int().positive().default(24),
+  // Google Search Console — single OAuth (not per-restaurant). We OAuth once
+  // as the verified owner of getbustan.com and slice the data per-restaurant
+  // by URL filter. See backend/scripts/get-gsc-refresh-token.ts.
+  GOOGLE_OAUTH_CLIENT_ID: optionalString(),
+  GOOGLE_OAUTH_CLIENT_SECRET: optionalString(),
+  GOOGLE_SEARCH_CONSOLE_REFRESH_TOKEN: optionalString(),
+  GOOGLE_SEARCH_CONSOLE_PROPERTY: z.string().default("sc-domain:getbustan.com"),
 });
 
 export const env = envSchema.parse(process.env);

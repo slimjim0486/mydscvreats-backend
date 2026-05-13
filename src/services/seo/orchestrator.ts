@@ -144,6 +144,34 @@ export async function runSeoAnalysisJob(analysisId: string) {
     });
 
     const gbp = get(gbpResult);
+
+    // Persist aggregate review metrics to GbpConnection so the public restaurant page
+    // can emit AggregateRating JSON-LD. We use the official GBP rating + total review
+    // count (not the fetched review sample) for accuracy.
+    if (gbp?.rating != null && gbp?.reviewCount != null && gbp.reviewCount > 0) {
+      await prisma.gbpConnection
+        .upsert({
+          where: { restaurantId: restaurant.id },
+          create: {
+            restaurantId: restaurant.id,
+            averageRating: gbp.rating,
+            reviewCount: gbp.reviewCount,
+            reviewsSyncedAt: new Date(),
+          },
+          update: {
+            averageRating: gbp.rating,
+            reviewCount: gbp.reviewCount,
+            reviewsSyncedAt: new Date(),
+          },
+        })
+        .catch((err) => {
+          console.warn("Failed to persist GBP review aggregate", {
+            restaurantId: restaurant.id,
+            message: errorMessage(err),
+          });
+        });
+    }
+
     const [rankGridResult, citationsResult] = await Promise.all([
       settleCollector("rankGrid", collectRankGridData(restaurant, gbp)),
       settleCollector("citations", collectCitationsData(restaurant, gbp)),

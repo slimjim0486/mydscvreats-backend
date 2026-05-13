@@ -277,6 +277,7 @@ model Restaurant {
   ownerChatMessages         OwnerChatMessage[]
   ownerChatMemories         OwnerChatMemory[]
   ownerWhispers             OwnerWhisper[]
+  gscSnapshots              GscSnapshot[]
 
   @@index([ownerId])
   @@index([operatorAccountId])
@@ -1126,19 +1127,43 @@ model AiUsageLog {
 }
 
 model GbpConnection {
-  id           String              @id @default(cuid())
-  restaurantId String              @unique @map("restaurant_id")
-  status       GbpConnectionStatus @default(not_connected)
-  gbpUrl       String?             @map("gbp_url")
-  placeId      String?             @map("place_id")
-  verifiedAt   DateTime?           @map("verified_at")
-  connectedAt  DateTime?           @map("connected_at")
-  createdAt    DateTime            @default(now()) @map("created_at")
-  updatedAt    DateTime            @updatedAt @map("updated_at")
+  id              String              @id @default(cuid())
+  restaurantId    String              @unique @map("restaurant_id")
+  status          GbpConnectionStatus @default(not_connected)
+  gbpUrl          String?             @map("gbp_url")
+  placeId         String?             @map("place_id")
+  verifiedAt      DateTime?           @map("verified_at")
+  connectedAt     DateTime?           @map("connected_at")
+  averageRating   Decimal?            @map("average_rating") @db.Decimal(2, 1)
+  reviewCount     Int?                @map("review_count")
+  reviewsSyncedAt DateTime?           @map("reviews_synced_at")
+  createdAt       DateTime            @default(now()) @map("created_at")
+  updatedAt       DateTime            @updatedAt @map("updated_at")
 
   restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
 
   @@map("gbp_connections")
+}
+
+// Daily Google Search Console snapshot, per restaurant. Populated by the
+// gsc-sync cron via the single Bustan-side OAuth (we own the getbustan.com
+// GSC property; we slice the data by `page` URL filter per slug).
+model GscSnapshot {
+  id           String   @id @default(cuid())
+  restaurantId String   @map("restaurant_id")
+  date         DateTime @db.Date
+  impressions  Int      @default(0)
+  clicks       Int      @default(0)
+  ctr          Decimal  @default(0) @db.Decimal(5, 4)
+  position     Decimal  @default(0) @db.Decimal(6, 2)
+  topQueries   Json?    @map("top_queries")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@unique([restaurantId, date])
+  @@index([restaurantId, date(sort: Desc)])
+  @@map("gsc_snapshots")
 }
 
 // =============================================================================

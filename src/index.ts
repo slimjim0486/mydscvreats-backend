@@ -8,6 +8,7 @@ import { startAdStudioWorker } from "@/queue/ad-studio-jobs";
 import { startWhatsAppRetentionWorker } from "@/queue/whatsapp-retention";
 import { startOwnerChatMemoryWorker } from "@/queue/owner-chat-memory";
 import { startOwnerWhisperWorker } from "@/queue/owner-whisper";
+import { startGscSyncWorker } from "@/queue/gsc-sync";
 import { adStudioRoute, adStudioPublicRoute } from "@/routes/ad-studio";
 import { analyticsRoute } from "@/routes/analytics";
 import { auditRoute } from "@/routes/audit";
@@ -26,6 +27,7 @@ import { shortLinksRoute } from "@/routes/short-links";
 import { subscriptionsRoute } from "@/routes/subscriptions";
 import { uploadRoute } from "@/routes/upload";
 import { gbpRoute } from "@/routes/gbp";
+import { gscRoute } from "@/routes/gsc";
 import { seoRoute } from "@/routes/seo";
 import { ownerChatRoute } from "@/routes/owner-chat";
 import { menuPrintRoute, pdfExportRoute } from "@/routes/pdf-export";
@@ -69,6 +71,7 @@ app.route("/api/webhooks", whatsappWebhooksRoute);
 app.route("/api/webhooks", metaDataDeletionRoute);
 app.route("/api/webhooks/clerk", clerkWebhooksRoute);
 app.route("/api/gbp", gbpRoute);
+app.route("/api/gsc", gscRoute);
 app.route("/api/seo", seoRoute);
 app.route("/api/menu-print", menuPrintRoute);
 app.route("/api/pdf-export", pdfExportRoute);
@@ -124,4 +127,12 @@ startOwnerWhisperWorker()
   })
   .catch((error) => {
     console.error("pg-boss owner-whisper worker failed to start", error);
+  });
+
+startGscSyncWorker()
+  .then(() => {
+    console.log("pg-boss gsc-sync worker started");
+  })
+  .catch((error) => {
+    console.error("pg-boss gsc-sync worker failed to start", error);
   });

@@ -13,7 +13,7 @@ import { errorResponse } from "@/lib/http";
 import { buildPublicMenuItemWhere } from "@/lib/menu-visibility";
 import { buildLivePromotionWhere, buildPromotionInclude } from "@/lib/promotions";
 import { prisma } from "@/lib/prisma";
-import { slugify } from "@/lib/slug";
+import { isReservedSlug, slugify } from "@/lib/slug";
 import { getCurrentUser, requireAuth, resolveAuthHeader } from "@/middleware/auth";
 import { generateSquareQrCode } from "@/services/qr-generator";
 
@@ -168,6 +168,12 @@ async function generateUniqueSlug(name: string, excludeRestaurantId?: string) {
   let count = 1;
 
   while (true) {
+    if (isReservedSlug(slug)) {
+      count += 1;
+      slug = `${baseSlug}-${count}`;
+      continue;
+    }
+
     const [restaurantMatch, aliasMatch] = await Promise.all([
       prisma.restaurant.findUnique({
         where: { slug },
@@ -242,6 +248,10 @@ export const restaurantsRoute = new Hono<{
 }>()
   .get("/", async (c) => {
     const cuisineType = c.req.query("cuisine");
+    const location = c.req.query("location");
+    const excludeSlug = c.req.query("excludeSlug");
+    const rawLimit = c.req.query("limit");
+    const limit = rawLimit ? Math.max(1, Math.min(50, Number.parseInt(rawLimit, 10) || 0)) : undefined;
 
     // Curated demo restaurants allowed on the Explore page
     const EXPLORE_SHOWCASE_SLUGS = [
@@ -279,6 +289,10 @@ export const restaurantsRoute = new Hono<{
         // Only show restaurants with a cover image on explore
         coverImageUrl: { not: null },
         ...(cuisineType ? { cuisineType } : {}),
+        ...(location
+          ? { location: { contains: location, mode: "insensitive" as const } }
+          : {}),
+        ...(excludeSlug ? { slug: { not: excludeSlug } } : {}),
       },
       include: {
         menuItems: true,
@@ -297,6 +311,7 @@ export const restaurantsRoute = new Hono<{
       orderBy: {
         updatedAt: "desc",
       },
+      ...(limit ? { take: limit } : {}),
     });
 
     return c.json(
