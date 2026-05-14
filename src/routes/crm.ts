@@ -59,6 +59,18 @@ const consentSchema = z.object({
   marketingOptIn: z.boolean(),
 });
 
+const customersQuerySchema = z.object({
+  search: z.string().trim().max(120).optional(),
+  // `recent` matches the summary endpoint's default. `name` is A→Z so
+  // operators can scan alphabetically when they know the diner's name.
+  sortBy: z.enum(["recent", "spend", "orders", "name"]).default("recent"),
+  // Offset pagination. Acceptable for the realistic upper bound (a few
+  // thousand customers per restaurant); switch to keyset if a tenant
+  // ever blows past that.
+  offset: z.coerce.number().int().min(0).max(10_000).default(0),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+
 const integrationSchema = z.object({
   code: z.string().min(8),
   signupSession: z
@@ -506,6 +518,84 @@ export const crmRoute = new Hono<{
             };
           }),
         },
+      });
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  })
+  .get("/:restaurantId/customers", requireAuth, async (c) => {
+    try {
+      const restaurantId = c.req.param("restaurantId");
+      const auth = c.get("auth");
+      await getOwnedRestaurant(restaurantId, auth.clerkId);
+      const { search, sortBy, offset, limit } = customersQuerySchema.parse(
+        Object.fromEntries(new URL(c.req.url).searchParams.entries())
+      );
+
+      // Search is a case-insensitive substring match on displayName OR
+      // phoneNumber. Phone search is forgiving: we strip non-digits from
+      // the term so "+971 50 749" and "971507" both find the same row.
+      const where: Prisma.CustomerWhereInput = { restaurantId };
+      if (search) {
+        const phoneDigits = search.replace(/\D/g, "");
+        where.OR = [
+          { displayName: { contains: search, mode: "insensitive" } },
+          { phoneNumber: { contains: search, mode: "insensitive" } },
+          ...(phoneDigits.length >= 3
+            ? [{ normalizedPhone: { contains: phoneDigits } }]
+            : []),
+        ];
+      }
+
+      // Sort presets — each falls back to recency so identical primary
+      // values (two customers with 0 orders, etc.) still land in a
+      // stable, useful order.
+      const orderBy: Prisma.CustomerOrderByWithRelationInput[] =
+        sortBy === "spend"
+          ? [{ totalSpend: "desc" }, { lastOrderAt: "desc" }]
+          : sortBy === "orders"
+            ? [{ orderCount: "desc" }, { lastOrderAt: "desc" }]
+            : sortBy === "name"
+              ? [{ displayName: "asc" }]
+              : [{ lastOrderAt: "desc" }, { createdAt: "desc" }];
+
+      const [rows, total] = await Promise.all([
+        prisma.customer.findMany({
+          where,
+          orderBy,
+          skip: offset,
+          take: limit,
+          include: {
+            consents: {
+              orderBy: { createdAt: "desc" },
+              take: 1,
+            },
+          },
+        }),
+        prisma.customer.count({ where }),
+      ]);
+
+      return c.json({
+        customers: rows.map((customer) => ({
+          id: customer.id,
+          displayName: customer.displayName,
+          phoneNumber: customer.phoneNumber,
+          marketingOptIn: customer.marketingOptIn,
+          lastOrderAt: customer.lastOrderAt,
+          orderCount: customer.orderCount,
+          totalSpend: toNumber(customer.totalSpend),
+          currency: customer.currency,
+          createdAt: customer.createdAt,
+          latestConsent: customer.consents[0]
+            ? {
+                status: customer.consents[0].status,
+                source: customer.consents[0].source,
+                createdAt: customer.consents[0].createdAt,
+              }
+            : null,
+        })),
+        total,
+        nextOffset: offset + rows.length < total ? offset + rows.length : null,
       });
     } catch (error) {
       return errorResponse(c, error);
