@@ -125,7 +125,13 @@ export function getCta(id: string): CtaPattern | undefined {
 }
 
 export function getCtasForCampaign(campaignId: CampaignType): CtaPattern[] {
-  const ids = (ctaSelectionRules.byCampaignType as Record<CampaignType, readonly string[]>)[campaignId] ?? [];
+  // Partial<...> because campaign types added outside the KB (e.g. "sabt_pack")
+  // don't have curated CTA shortlists. Falls back to an empty list and the
+  // funnel-stage CTAs at the call site.
+  const ids =
+    (ctaSelectionRules.byCampaignType as Partial<Record<CampaignType, readonly string[]>>)[
+      campaignId
+    ] ?? [];
   return ids.map((id) => ctaPatterns.find((c) => c.id === id)).filter((c): c is CtaPattern => Boolean(c));
 }
 

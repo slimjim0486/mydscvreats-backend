@@ -49,6 +49,11 @@ export interface PlanEntitlements {
   // Phase 3.1 — Google Search Console dashboard. Read-only view of GSC data
   // sliced per restaurant from Bustan's shared GSC property.
   gscDashboardEnabled: boolean;
+  // Sabt Pack — weekly auto-generated 7-post bundle delivered Sun 07:00 GST.
+  // Pro/Portfolio only. Cap bounds variable image-gen spend per restaurant
+  // per week — orchestrator force-reuses menu photos beyond this ceiling.
+  sabtPackEnabled: boolean;
+  sabtPackMaxCostUsdPerWeek: number;
 }
 
 const PLAN_ENTITLEMENTS: Record<
@@ -94,6 +99,8 @@ const PLAN_ENTITLEMENTS: Record<
     openaiImageMonthlyLimit: 0,
     adGenerationsPerProject: 0,
     gscDashboardEnabled: false,
+    sabtPackEnabled: false,
+    sabtPackMaxCostUsdPerWeek: 0,
   },
   pro: {
     menuItemLimit: null,
@@ -134,6 +141,8 @@ const PLAN_ENTITLEMENTS: Record<
     openaiImageMonthlyLimit: 50,
     adGenerationsPerProject: 6,
     gscDashboardEnabled: true,
+    sabtPackEnabled: true,
+    sabtPackMaxCostUsdPerWeek: 0.3,
   },
   portfolio: {
     menuItemLimit: null,
@@ -174,6 +183,8 @@ const PLAN_ENTITLEMENTS: Record<
     openaiImageMonthlyLimit: 50,
     adGenerationsPerProject: 6,
     gscDashboardEnabled: true,
+    sabtPackEnabled: true,
+    sabtPackMaxCostUsdPerWeek: 0.3,
   },
 };
 
@@ -218,6 +229,8 @@ const DRAFT_ENTITLEMENTS: PlanEntitlements = {
   openaiImageMonthlyLimit: 0,
   adGenerationsPerProject: 0,
   gscDashboardEnabled: false,
+  sabtPackEnabled: false,
+  sabtPackMaxCostUsdPerWeek: 0,
 };
 
 type RestaurantPlanSource =
@@ -287,6 +300,10 @@ function getPendingPortfolioEntitlements(): PlanEntitlements {
 
 export function getAdStudioUpgradeMessage() {
   return "The Ad Creative Studio is available on Pro. Upgrade to generate ads from your menu in minutes.";
+}
+
+export function getSabtPackUpgradeMessage() {
+  return "Sabt Pack delivers 7 ready-to-publish posts every Sunday morning. Available on Pro and Portfolio.";
 }
 
 export function getPlanEntitlements(plan: SubscriptionPlan): PlanEntitlements {

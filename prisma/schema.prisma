@@ -277,6 +277,7 @@ model Restaurant {
   isPublished        Boolean            @default(false) @map("is_published")
   subscriptionStatus SubscriptionStatus @default(trial) @map("subscription_status")
   trialEndsAt        DateTime?          @map("trial_ends_at")
+  sabtPackEnabled    Boolean            @default(true) @map("sabt_pack_enabled")
   ownerId            String             @map("owner_user_id")
   operatorAccountId  String?            @map("operator_account_id")
   createdAt          DateTime           @default(now()) @map("created_at")
@@ -812,7 +813,9 @@ model WhatsAppIntegration {
   status             WhatsAppIntegrationStatus @default(pending)
   wabaId             String?                   @map("waba_id")
   businessAccountId  String?                   @map("business_account_id")
-  /** Meta `user_id` from the OAuth `signed_request` — used to honour data deletion / deauthorize callbacks. */
+  /**
+   * Meta `user_id` from the OAuth `signed_request` — used to honour data deletion / deauthorize callbacks.
+   */
   metaUserId         String?                   @map("meta_user_id")
   phoneNumberId      String                    @unique @map("phone_number_id")
   displayPhoneNumber String                    @map("display_phone_number")
@@ -1213,32 +1216,40 @@ model GscSnapshot {
 // =============================================================================
 
 model AdProject {
-  id                String          @id @default(cuid())
-  restaurantId      String          @map("restaurant_id")
-  name              String
-  campaignType      String          @map("campaign_type") // CampaignType id from KB (e.g. "iftar_fill_house")
-  goal              String // Funnel stage: "tofu" | "mofu" | "bofu" | "retention"
-  countries         String[] // ISO codes: ["AE", "SA"]
-  cuisines          String[] // CuisineFit ids from KB
-  targetPlatforms   String[]        @map("target_platforms") // PlatformId values
-  budgetTier        String          @map("budget_tier") // "lean" | "standard" | "aggressive"
-  budgetAed         Int             @map("budget_aed")
-  durationWeeks     Int?            @map("duration_weeks")
-  startsOn          DateTime?       @map("starts_on")
-  endsOn            DateTime?       @map("ends_on")
-  primaryDishId     String?         @map("primary_dish_id") // Optional menu item to feature
-  brandVoice        String?         @map("brand_voice") @db.Text
-  status            AdProjectStatus @default(draft)
-  generationPhase   String?         @map("generation_phase") // "strategy" | "copy" | "images" | null
-  shareToken        String?         @unique @map("share_token")
+  id                    String          @id @default(cuid())
+  restaurantId          String          @map("restaurant_id")
+  name                  String
+  campaignType          String          @map("campaign_type") // CampaignType id from KB (e.g. "iftar_fill_house")
+  goal                  String // Funnel stage: "tofu" | "mofu" | "bofu" | "retention"
+  countries             String[] // ISO codes: ["AE", "SA"]
+  cuisines              String[] // CuisineFit ids from KB
+  targetPlatforms       String[]        @map("target_platforms") // PlatformId values
+  budgetTier            String          @map("budget_tier") // "lean" | "standard" | "aggressive"
+  budgetAed             Int             @map("budget_aed")
+  durationWeeks         Int?            @map("duration_weeks")
+  startsOn              DateTime?       @map("starts_on")
+  endsOn                DateTime?       @map("ends_on")
+  primaryDishId         String?         @map("primary_dish_id") // Optional menu item to feature
+  brandVoice            String?         @map("brand_voice") @db.Text
+  status                AdProjectStatus @default(draft)
+  generationPhase       String?         @map("generation_phase") // "strategy" | "copy" | "images" | null
+  shareToken            String?         @unique @map("share_token")
   // Frozen snapshots so generated creative is reproducible/auditable
-  briefJson         Json            @map("brief_json")
-  kbVersionAtGen    String?         @map("kb_version_at_gen")
+  briefJson             Json            @map("brief_json")
+  kbVersionAtGen        String?         @map("kb_version_at_gen")
   // Failure / status info
-  lastError         String?         @map("last_error") @db.Text
-  generationCostUsd Decimal?        @map("generation_cost_usd") @db.Decimal(10, 4)
-  createdAt         DateTime        @default(now()) @map("created_at")
-  updatedAt         DateTime        @updatedAt @map("updated_at")
+  lastError             String?         @map("last_error") @db.Text
+  generationCostUsd     Decimal?        @map("generation_cost_usd") @db.Decimal(10, 4)
+  // Sabt Pack — weekly auto-generated 7-post bundle. AdProject is reused for
+  // the persistent shape (creatives, exports, share token, safety flags); the
+  // fields below mark Sabt Pack rows and gate idempotency on (restaurant, week).
+  sabtPackWeekStartDate DateTime?       @map("sabt_pack_week_start_date") @db.Date
+  sabtPackStatus        SabtPackStatus? @map("sabt_pack_status")
+  sabtPackDeliveredAt   DateTime?       @map("sabt_pack_delivered_at")
+  sabtPackApprovedAt    DateTime?       @map("sabt_pack_approved_at")
+  sabtPackThemeOfWeek   String?         @map("sabt_pack_theme_of_week") @db.Text
+  createdAt             DateTime        @default(now()) @map("created_at")
+  updatedAt             DateTime        @updatedAt @map("updated_at")
 
   restaurant          Restaurant       @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   creatives           AdCreative[]
@@ -1246,8 +1257,10 @@ model AdProject {
   liveCampaigns       AdLiveCampaign[]
   attributedCustomers Customer[]       @relation("CustomerReferralProject")
 
+  @@unique([restaurantId, sabtPackWeekStartDate], name: "uniq_sabt_pack_per_week")
   @@index([restaurantId, status, createdAt])
   @@index([restaurantId, createdAt])
+  @@index([sabtPackStatus, sabtPackWeekStartDate])
   @@map("ad_projects")
 }
 
@@ -1262,17 +1275,23 @@ model AdLiveCampaign {
   launchedAt         DateTime?            @map("launched_at")
   lastSyncedAt       DateTime?            @map("last_synced_at")
   notes              String?              @db.Text
-  /** Phase 2C: when set, the cron sync job pulls insights from Meta API. */
+  /**
+   * Phase 2C: when set, the cron sync job pulls insights from Meta API.
+   */
   metaIntegrationId  String?              @map("meta_integration_id")
-  /** Whether autopilot polls this campaign on the cron. Default true once linked. */
+  /**
+   * Whether autopilot polls this campaign on the cron. Default true once linked.
+   */
   autoSync           Boolean              @default(true) @map("auto_sync")
-  /** Last sync error so the UI can surface "reconnect Meta" prompts. */
+  /**
+   * Last sync error so the UI can surface "reconnect Meta" prompts.
+   */
   lastSyncError      String?              @map("last_sync_error") @db.Text
   createdAt          DateTime             @default(now()) @map("created_at")
   updatedAt          DateTime             @updatedAt @map("updated_at")
 
-  project         AdProject                  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  metaIntegration MetaAdsIntegration?        @relation(fields: [metaIntegrationId], references: [id], onDelete: SetNull)
+  project         AdProject                 @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  metaIntegration MetaAdsIntegration?       @relation(fields: [metaIntegrationId], references: [id], onDelete: SetNull)
   snapshots       AdPerformanceSnapshot[]
   adMappings      AdLiveCampaignAdMapping[]
 
@@ -1309,30 +1328,48 @@ model MetaAdsIntegration {
   id                String                   @id @default(cuid())
   restaurantId      String                   @unique @map("restaurant_id")
   status            MetaAdsIntegrationStatus @default(pending)
-  /** Meta `user_id` from the OAuth `signed_request` — required for data deletion / deauthorize callbacks. */
+  /**
+   * Meta `user_id` from the OAuth `signed_request` — required for data deletion / deauthorize callbacks.
+   */
   metaUserId        String?                  @map("meta_user_id")
-  /** Meta Business Account ID — owner picks one when multiple are available. */
+  /**
+   * Meta Business Account ID — owner picks one when multiple are available.
+   */
   businessId        String?                  @map("business_id")
   businessName      String?                  @map("business_name")
-  /** "act_<id>" — selected ad account for this restaurant. */
+  /**
+   * "act_<id>" — selected ad account for this restaurant.
+   */
   adAccountId       String?                  @map("ad_account_id")
   adAccountName     String?                  @map("ad_account_name")
-  /** Optional Page ID for ad creative attachment. */
+  /**
+   * Optional Page ID for ad creative attachment.
+   */
   pageId            String?                  @map("page_id")
   pageName          String?                  @map("page_name")
-  /** Optional Pixel ID surfaced in upload-guide tracking. */
+  /**
+   * Optional Pixel ID surfaced in upload-guide tracking.
+   */
   pixelId           String?                  @map("pixel_id")
-  /** AES-256-GCM encrypted Meta long-lived token (60-day TTL). */
+  /**
+   * AES-256-GCM encrypted Meta long-lived token (60-day TTL).
+   */
   accessTokenCipher String?                  @map("access_token_cipher") @db.Text
-  /** Last 4 chars of the plaintext token for UI display only. */
+  /**
+   * Last 4 chars of the plaintext token for UI display only.
+   */
   tokenLastFour     String?                  @map("token_last_four")
   tokenExpiresAt    DateTime?                @map("token_expires_at")
-  /** Granted scopes from the OAuth callback. */
+  /**
+   * Granted scopes from the OAuth callback.
+   */
   scopes            String[]
   connectedAt       DateTime?                @map("connected_at")
   lastSyncedAt      DateTime?                @map("last_synced_at")
   lastError         String?                  @map("last_error") @db.Text
-  /** CSRF state for the in-flight OAuth round-trip — null after callback. */
+  /**
+   * CSRF state for the in-flight OAuth round-trip — null after callback.
+   */
   pendingState      String?                  @map("pending_state")
   pendingStateAt    DateTime?                @map("pending_state_at")
   createdAt         DateTime                 @default(now()) @map("created_at")
@@ -1365,9 +1402,11 @@ model AdPerformanceSnapshot {
   cpcAed         Decimal?            @map("cpc_aed") @db.Decimal(10, 2)
   cpaAed         Decimal?            @map("cpa_aed") @db.Decimal(10, 2)
   frequency      Decimal?            @db.Decimal(6, 2)
-  /** Current daily budget at the time of this snapshot. Lets the engine emit
-   *  concrete scale recommendations like "scale to AED 60/day" instead of
-   *  "increase by 20%". */
+  /**
+   * Current daily budget at the time of this snapshot. Lets the engine emit
+   * concrete scale recommendations like "scale to AED 60/day" instead of
+   * "increase by 20%".
+   */
   dailyBudgetAed Decimal?            @map("daily_budget_aed") @db.Decimal(10, 2)
   extraJson      Json?               @map("extra_json")
   createdAt      DateTime            @default(now()) @map("created_at")
@@ -1399,7 +1438,9 @@ model AdCreative {
   heroImageUrl              String?          @map("hero_image_url")
   heroImagePrompt           String?          @map("hero_image_prompt") @db.Text
   heroImageSourceMenuItemId String?          @map("hero_image_source_menu_item_id") // If reused from menu
-  /** Which model rendered the hero image (or `menu_item` when reused). */
+  /**
+   * Which model rendered the hero image (or `menu_item` when reused).
+   */
   imageProvider             AdImageProvider? @map("image_provider")
   // Generation metadata
   status                    AdCreativeStatus @default(pending)
@@ -1408,6 +1449,15 @@ model AdCreative {
   // User-edits
   isEdited                  Boolean          @default(false) @map("is_edited")
   isApproved                Boolean          @default(false) @map("is_approved")
+  // Sabt Pack slot metadata. Null on regular Ad Studio creatives. For Sabt Pack
+  // rows, slot is 1..7 and slotFormat marks which platform/aspect the creative
+  // targets. Slot 1 (slideshow) populates slideshowFrames with 5 R2 URLs.
+  // Slot 7 (GBP post) populates gbpPostBody with a 1,500-char body.
+  sabtPackSlot              Int?             @map("sabt_pack_slot")
+  sabtPackSlotFormat        String?          @map("sabt_pack_slot_format")
+  sabtPackSlideshowFrames   Json?            @map("sabt_pack_slideshow_frames")
+  gbpPostBody               String?          @map("gbp_post_body") @db.Text
+  scheduledFor              DateTime?        @map("scheduled_for") @db.Date
   createdAt                 DateTime         @default(now()) @map("created_at")
   updatedAt                 DateTime         @updatedAt @map("updated_at")
 
@@ -1417,7 +1467,20 @@ model AdCreative {
 
   @@unique([projectId, variant])
   @@index([projectId, status])
+  @@index([projectId, sabtPackSlot])
   @@map("ad_creatives")
+}
+
+enum SabtPackStatus {
+  queued
+  generating
+  ready
+  delivered
+  partial
+  failed
+  approved
+
+  @@map("sabt_pack_status")
 }
 
 model AdExport {

@@ -107,3 +107,54 @@ export interface OrchestratorResult {
   tokensIn: number;
   tokensOut: number;
 }
+
+// =============================================================================
+// SABT PACK — Weekly 7-slot bundle types
+// =============================================================================
+
+/** The 7 platform/aspect-ratio slots a Sabt Pack produces. Slot order is
+ *  authored (1..7) so the review surface renders predictably. */
+export type SabtPackSlotFormat =
+  | "slideshow_5_4_5"     // slot 1: 5×1080×1350 TikTok Photo Mode / IG Carousel
+  | "ig_reel_still_9_16"  // slot 2: Reels cover / Stories
+  | "ig_feed_4_5"         // slot 3: IG Feed post
+  | "carousel_1_1"        // slot 4: IG Carousel cover / Snap
+  | "gbp_1_91_1"          // slot 5: GBP landscape image
+  | "wa_status_9_16"      // slot 6: WhatsApp Status
+  | "gbp_post_1_91_1";    // slot 7: GBP Post (text + image)
+
+export interface WeeklySlotPlan {
+  slot: 1 | 2 | 3 | 4 | 5 | 6 | 7;
+  format: SabtPackSlotFormat;
+  archetypeId: string;
+  hookId: string;
+  ctaId: string;
+  copyFrameworkId: string;
+  language: "en" | "ar" | "bilingual";
+  dialect: StrategyDecision["dialect"];
+  /** Menu item ID to feature in this slot. The orchestrator passes this to
+   *  the existing image-gen + image-prompt passes as the primary dish. */
+  primaryDishId: string;
+  /** 1-2 sentence shot brief consumed by runImagePromptPass. */
+  imageDirection: string;
+  /** Suggested post day, Mon..Sat ISO date. The owner sees this on the
+   *  review surface as "Best to post Wed" — never auto-published. */
+  scheduledFor: string;
+  /** Optional KB calendar moment id (e.g. "ramadan_iftar", "uae_national_day")
+   *  when this week intersects a high-impact event. */
+  calendarMomentId?: string;
+}
+
+export interface WeeklyStrategyDecision {
+  /** Sunday-of-the-week ISO date that this pack belongs to. */
+  weekStartDate: string;
+  /** 1-line cohesion theme so the 7 slots feel like a campaign, not 7 random
+   *  posts. e.g. "First sunny weekend of May — outdoor lunch energy". */
+  brandThemeOfWeek: string;
+  slots: WeeklySlotPlan[];
+  /** Default dialect when a slot doesn't override. English-first by default. */
+  dialectDefault: StrategyDecision["dialect"];
+  /** Reasoning trace for audit / debug; never shown to owner. */
+  rationale: string;
+}
+

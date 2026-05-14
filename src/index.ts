@@ -9,7 +9,9 @@ import { startWhatsAppRetentionWorker } from "@/queue/whatsapp-retention";
 import { startOwnerChatMemoryWorker } from "@/queue/owner-chat-memory";
 import { startOwnerWhisperWorker } from "@/queue/owner-whisper";
 import { startGscSyncWorker } from "@/queue/gsc-sync";
+import { startSabtPackWorker } from "@/queue/sabt-pack";
 import { adStudioRoute, adStudioPublicRoute } from "@/routes/ad-studio";
+import { sabtPackRoute, sabtPackAdminRoute } from "@/routes/sabt-pack";
 import { adminRoute } from "@/routes/admin";
 import { analyticsRoute } from "@/routes/analytics";
 import { auditRoute } from "@/routes/audit";
@@ -81,6 +83,8 @@ app.route("/api/menu-print", menuPrintRoute);
 app.route("/api/pdf-export", pdfExportRoute);
 app.route("/api/ad-studio-public", adStudioPublicRoute);
 app.route("/api/ad-studio", adStudioRoute);
+app.route("/api/sabt-pack", sabtPackRoute);
+app.route("/api/admin/sabt-pack", sabtPackAdminRoute);
 
 serve(
   {
@@ -139,4 +143,12 @@ startGscSyncWorker()
   })
   .catch((error) => {
     console.error("pg-boss gsc-sync worker failed to start", error);
+  });
+
+startSabtPackWorker()
+  .then(() => {
+    console.log("pg-boss sabt-pack worker started");
+  })
+  .catch((error) => {
+    console.error("pg-boss sabt-pack worker failed to start", error);
   });

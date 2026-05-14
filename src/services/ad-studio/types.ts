@@ -243,7 +243,11 @@ export type CampaignType =
   | "dormant_reactivation"
   | "catering_corporate_lead_gen"
   | "premium_brand_defense"
-  | "multi_location_chain";
+  | "multi_location_chain"
+  // Sabt Pack — synthetic campaign type for weekly auto-generated 7-post bundles.
+  // Has no KB archetype entry (it's not a real campaign archetype owners can
+  // choose in the wizard); only Sabt Pack rows in AdProject use this value.
+  | "sabt_pack";
 
 export interface CampaignArchetype {
   id: CampaignType;
