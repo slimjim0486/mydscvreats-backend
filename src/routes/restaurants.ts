@@ -65,6 +65,7 @@ const createRestaurantSchema = z.object({
   logoUrl: z.string().url().nullable().optional(),
   coverImageUrl: z.string().url().nullable().optional(),
   isPublished: z.boolean().optional(),
+  isDemo: z.boolean().optional(),
 });
 
 const updateRestaurantSchema = createRestaurantSchema.partial().extend({
@@ -252,6 +253,7 @@ export const restaurantsRoute = new Hono<{
     const excludeSlug = c.req.query("excludeSlug");
     const rawLimit = c.req.query("limit");
     const limit = rawLimit ? Math.max(1, Math.min(50, Number.parseInt(rawLimit, 10) || 0)) : undefined;
+    const includeDemo = c.req.query("includeDemo") === "true";
 
     // Curated demo restaurants allowed on the Explore page
     const EXPLORE_SHOWCASE_SLUGS = [
@@ -285,6 +287,10 @@ export const restaurantsRoute = new Hono<{
               { slug: { in: EXPLORE_SHOWCASE_SLUGS } },
             ],
           },
+          // Hide is_demo=true restaurants from public listings (explore, sitemap,
+          // location pages, similar-restaurants). Authenticated dashboards can opt
+          // in with ?includeDemo=true.
+          ...(includeDemo ? [] : [{ isDemo: false }]),
         ],
         // Only show restaurants with a cover image on explore
         coverImageUrl: { not: null },
@@ -411,6 +417,7 @@ export const restaurantsRoute = new Hono<{
           logoUrl: data.logoUrl ?? null,
           coverImageUrl: data.coverImageUrl ?? null,
           isPublished: data.isPublished ?? false,
+          isDemo: data.isDemo ?? false,
           trialEndsAt: null,
           subscriptionStatus: "trial",
         },

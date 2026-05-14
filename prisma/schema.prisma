@@ -275,6 +275,7 @@ model Restaurant {
   logoUrl            String?            @map("logo_url")
   coverImageUrl      String?            @map("cover_image_url")
   isPublished        Boolean            @default(false) @map("is_published")
+  isDemo             Boolean            @default(false) @map("is_demo")
   subscriptionStatus SubscriptionStatus @default(trial) @map("subscription_status")
   trialEndsAt        DateTime?          @map("trial_ends_at")
   sabtPackEnabled    Boolean            @default(true) @map("sabt_pack_enabled")
@@ -324,6 +325,7 @@ model Restaurant {
 
   @@index([ownerId])
   @@index([operatorAccountId])
+  @@index([isDemo])
   @@map("restaurants")
 }
 
