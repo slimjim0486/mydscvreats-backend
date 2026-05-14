@@ -83,10 +83,14 @@ export interface RunSabtPackResult {
 /** Quick guard: a Sabt Pack only ships for Pro/Portfolio restaurants with the
  *  feature toggled on. The fanout query also filters on this; the orchestrator
  *  re-checks belt-and-suspenders so the admin/test trigger endpoint can't
- *  bypass the gate. */
-async function loadEligibleRestaurant(restaurantId: string) {
-  const restaurant = await prisma.restaurant.findUnique({
-    where: { id: restaurantId },
+ *  bypass the gate.
+ *
+ *  Accepts either a cuid `id` or a `slug` (e.g. "zaytoun-kitchen") so manual
+ *  triggers from the CLI / admin route are owner-friendly. The canonical id
+ *  is what gets returned and used downstream for every DB write. */
+async function loadEligibleRestaurant(idOrSlug: string) {
+  const restaurant = await prisma.restaurant.findFirst({
+    where: { OR: [{ id: idOrSlug }, { slug: idOrSlug }] },
     include: {
       subscription: true,
       operatorAccount: {
@@ -413,14 +417,19 @@ function safetyFlagsJson(flags: unknown): Prisma.InputJsonValue {
 export async function runSabtPackGeneration(
   args: RunSabtPackArgs
 ): Promise<RunSabtPackResult> {
-  const { restaurantId, weekStartDate } = args;
+  const { restaurantId: restaurantIdOrSlug, weekStartDate } = args;
   const weekDate = new Date(`${weekStartDate}T00:00:00Z`);
 
   // Eligibility — Pro/Portfolio + sabtPackEnabled.
-  const eligibility = await loadEligibleRestaurant(restaurantId);
+  // loadEligibleRestaurant accepts either a cuid id or a slug (e.g. for
+  // manual CLI / admin triggers). After this point, `restaurantId` always
+  // refers to the canonical cuid — downstream queries must use that, not
+  // the original input.
+  const eligibility = await loadEligibleRestaurant(restaurantIdOrSlug);
   if (!eligibility) {
-    throw new ApiError(`Restaurant not found: ${restaurantId}`, 404);
+    throw new ApiError(`Restaurant not found: ${restaurantIdOrSlug}`, 404);
   }
+  const restaurantId = eligibility.restaurant.id;
   if (!eligibility.eligible) {
     console.log(
       `${FUNCTION_TAG} ${restaurantId} ineligible (toggle off or no Pro/Portfolio subscription)`
