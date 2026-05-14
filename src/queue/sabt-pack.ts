@@ -4,10 +4,16 @@
 // scheduled) that enumerates Pro/Portfolio restaurants without a current-week
 // pack and enqueues per-restaurant generate jobs.
 //
+// Owner notification:
+//   • Sunday morning email via Resend ("Your Sabt Pack is ready") + dashboard
+//     banner on /dashboard. NOT delivered via the restaurant's connected
+//     WhatsApp Business — that integration is for customer-facing messages,
+//     and self-messaging the owner from her own WABA would be confusing and
+//     would burn into her per-WABA messaging tier capacity.
+//   • If Resend isn't configured (no RESEND_API_KEY / RESEND_FROM_EMAIL),
+//     the banner is the only delivery channel — generation still completes.
+//
 // Production deploy notes:
-//   • Set SABT_PACK_WHATSAPP_ENABLED=false on first rollout — the dashboard
-//     banner is the delivery channel until the `sabt_pack_ready` Meta template
-//     clears review.
 //   • The cron `0 3 * * 0` lands at exactly 07:00 GST every Sunday (UAE is
 //     UTC+4 year-round, no DST).
 //   • Idempotency: re-running the same Sunday twice is a no-op for restaurants
@@ -17,12 +23,8 @@
 import PgBoss from "pg-boss";
 import { env } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
-import {
-  decryptAccessToken,
-  normalizeE164Phone,
-  sendWhatsAppTemplate,
-} from "@/lib/whatsapp-business";
 import { getBoss } from "@/queue/image-generation";
+import { sendLifecycleEmail } from "@/services/email";
 import {
   runSabtPackGeneration,
   sundayOfThisWeekUae,
@@ -33,36 +35,6 @@ export const SABT_PACK_GENERATE_JOB = "sabt-pack-generate";
 
 const RETRY_LIMIT = 1;
 const FANOUT_RESTAURANT_CAP = 1000;
-
-/** Max length for a WhatsApp template body parameter. Meta caps each
- *  parameter at ~80 chars and rejects sends with longer values (error 131009).
- *  We trim conservatively to 60 to leave room for surrounding template text. */
-const WHATSAPP_PARAM_MAX_LENGTH = 60;
-
-/** Sanitize a parameter value for sendWhatsAppTemplate. Strips newlines,
- *  tabs, and runs of whitespace that Meta rejects; truncates to the per-param
- *  cap. Returns a placeholder when the input collapses to empty. */
-function sanitizeTemplateParam(value: string | null | undefined, fallback: string): string {
-  if (!value) return fallback;
-  const cleaned = value
-    .replace(/[\r\n\t]+/g, " ") // newlines/tabs → space
-    .replace(/\s{2,}/g, " ") // collapse runs of whitespace
-    .trim();
-  if (!cleaned) return fallback;
-  return cleaned.length > WHATSAPP_PARAM_MAX_LENGTH
-    ? `${cleaned.slice(0, WHATSAPP_PARAM_MAX_LENGTH - 1)}…`
-    : cleaned;
-}
-
-/** Strip Meta access tokens from an error message so they cannot leak through
- *  Sentry or stdout logs. Meta long-lived tokens are `EAA` + base64-ish
- *  characters, typically 200+ chars. Conservative regex catches both
- *  long-lived (EAA…) and short-lived (sk-style) tokens. */
-function redactMetaSecrets(input: string): string {
-  return input
-    .replace(/EAA[A-Za-z0-9_-]{20,}/g, "EAA…[redacted]")
-    .replace(/Bearer\s+[A-Za-z0-9._-]{20,}/g, "Bearer …[redacted]");
-}
 
 let fanoutQueueReady: Promise<void> | null = null;
 let generateQueueReady: Promise<void> | null = null;
@@ -215,7 +187,7 @@ async function processGenerateJob(job: GenerateWorkerJob) {
     return;
   }
 
-  if (!result.shouldSendWhatsApp) {
+  if (!result.shouldNotifyOwner) {
     // Partial pack — banner only.
     console.log(
       `[sabt-pack] ${restaurantId} ${weekStartDate} partial=${result.slotsPersisted}/7 (banner-only)`
@@ -223,82 +195,56 @@ async function processGenerateJob(job: GenerateWorkerJob) {
     return;
   }
 
-  if (!env.SABT_PACK_WHATSAPP_ENABLED) {
+  await sendSabtPackEmail({
+    restaurantId,
+    adProjectId: result.adProjectId,
+    themeOfWeek: result.themeOfWeek,
+  });
+}
+
+/** Sunday-morning email to the restaurant owner. Updates `sabt_pack_delivered_at`
+ *  on success. Errors do NOT bubble to the worker because an email outage shouldn't
+ *  reset a successful pack to "generating" — the banner is the always-on fallback. */
+async function sendSabtPackEmail(args: {
+  restaurantId: string;
+  adProjectId: string;
+  themeOfWeek: string | null;
+}) {
+  if (!env.RESEND_API_KEY || !env.RESEND_FROM_EMAIL) {
     console.log(
-      `[sabt-pack] ${restaurantId} ${weekStartDate} ready, WhatsApp send disabled by flag`
+      `[sabt-pack] ${args.restaurantId} email not configured; banner-only delivery`
     );
     return;
   }
 
-  await sendSabtPackWhatsApp({
-    restaurantId,
-    adProjectId: result.adProjectId,
-  });
-}
-
-/** Sends the `sabt_pack_ready` template to the restaurant's WhatsApp Business
- *  number. Updates `sabt_pack_delivered_at` on success. Errors do NOT bubble
- *  to the worker because a WhatsApp outage shouldn't reset a successful pack
- *  to "generating" — the banner is the fallback. */
-async function sendSabtPackWhatsApp(args: { restaurantId: string; adProjectId: string }) {
   const restaurant = await prisma.restaurant.findUnique({
     where: { id: args.restaurantId },
     select: {
       id: true,
       name: true,
-      cuisineType: true,
-      whatsappNumber: true,
-      whatsappIntegration: {
-        select: {
-          status: true,
-          phoneNumberId: true,
-          accessTokenCipher: true,
-        },
-      },
+      owner: { select: { email: true, fullName: true } },
     },
   });
 
-  if (!restaurant) return;
-  const integration = restaurant.whatsappIntegration;
-  if (!integration || integration.status !== "connected") {
-    console.log(
-      `[sabt-pack] ${args.restaurantId} no connected WhatsApp; banner-only delivery`
-    );
-    return;
-  }
-
-  const target = normalizeE164Phone(restaurant.whatsappNumber);
-  if (!target) {
+  if (!restaurant?.owner?.email) {
     console.warn(
-      `[sabt-pack] ${args.restaurantId} no valid whatsappNumber; banner-only delivery`
+      `[sabt-pack] ${args.restaurantId} no owner email; banner-only delivery`
     );
     return;
   }
 
   const reviewUrl = `${env.FRONTEND_APP_URL.replace(/\/$/, "")}/dashboard/ad-studio/weekly/${args.adProjectId}`;
 
-  // Owner-controlled strings (restaurant.name, cuisineType) are passed as
-  // template parameters and must be sanitized — Meta rejects sends with
-  // newlines, tabs, or runs of whitespace inside parameter values, and
-  // truncates anything past ~80 chars with confusing 131009 errors.
-  const params = [
-    sanitizeTemplateParam(restaurant.name, "your restaurant"),
-    sanitizeTemplateParam(restaurant.cuisineType, "your customers"),
-    reviewUrl,
-  ];
-
-  // Decrypted access token is kept inside the try and explicitly zeroed in
-  // the finally block. Errors are redacted before logging so a token can
-  // never leak via Sentry / stdout.
-  let accessToken = "";
   try {
-    accessToken = decryptAccessToken(integration.accessTokenCipher);
-    await sendWhatsAppTemplate({
-      accessToken,
-      phoneNumberId: integration.phoneNumberId,
-      to: target,
-      templateName: "sabt_pack_ready",
-      parameters: params,
+    await sendLifecycleEmail({
+      to: restaurant.owner.email,
+      subject: `Your Sabt Pack is ready — 7 posts for the week`,
+      html: buildSabtPackEmailHtml({
+        ownerName: restaurant.owner.fullName,
+        restaurantName: restaurant.name,
+        themeOfWeek: args.themeOfWeek,
+        reviewUrl,
+      }),
     });
 
     await prisma.adProject.update({
@@ -308,19 +254,84 @@ async function sendSabtPackWhatsApp(args: { restaurantId: string; adProjectId: s
         sabtPackDeliveredAt: new Date(),
       },
     });
-    console.log(`[sabt-pack] ${args.restaurantId} delivered via WhatsApp`);
+    console.log(`[sabt-pack] ${args.restaurantId} delivered via email`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn(
-      `[sabt-pack] WhatsApp send failed for ${args.restaurantId}; pack remains ready:`,
-      redactMetaSecrets(message)
+      `[sabt-pack] email send failed for ${args.restaurantId}; pack remains ready:`,
+      message
     );
     // Don't mark delivered; banner stays visible.
-  } finally {
-    // Best-effort overwrite — JS GC will collect the original string, but
-    // zeroing the local reference ensures it doesn't survive in the closure.
-    accessToken = "";
   }
+}
+
+/** Escape strings interpolated into HTML so a restaurant name like
+ *  "Mama's <i>Kitchen</i>" can't break out of the template. */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+interface SabtPackEmailInput {
+  ownerName: string | null;
+  restaurantName: string;
+  themeOfWeek: string | null;
+  reviewUrl: string;
+}
+
+function buildSabtPackEmailHtml(input: SabtPackEmailInput): string {
+  const greeting = input.ownerName
+    ? `Hi ${escapeHtml(input.ownerName.split(" ")[0] ?? input.ownerName)},`
+    : "Hi there,";
+  const themeBlock = input.themeOfWeek
+    ? `<p style="margin: 0 0 24px; padding: 16px 18px; background: #FFF8EC; border-radius: 16px; font-size: 14px; color: #5C4A2C; line-height: 1.5;"><strong style="color: #8A6912;">This week's theme:</strong> ${escapeHtml(
+        input.themeOfWeek
+      )}</p>`
+    : "";
+  // Inline styles only — most email clients strip <style> and external CSS.
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Your Sabt Pack is ready</title>
+</head>
+<body style="margin: 0; padding: 0; background: #FFFDF9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #201A17;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background: #FFFDF9; padding: 32px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width: 560px; background: #FFFFFF; border-radius: 24px; border: 1px solid #E5D7C0; overflow: hidden;">
+          <tr>
+            <td style="padding: 32px 32px 8px;">
+              <p style="margin: 0 0 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: #8A6912;">Sabt Pack · Week ready</p>
+              <h1 style="margin: 0 0 8px; font-size: 24px; line-height: 1.25; color: #201A17;">Your 7 posts for the week</h1>
+              <p style="margin: 0 0 24px; font-size: 15px; line-height: 1.5; color: #5C5046;">
+                ${greeting} ${escapeHtml(input.restaurantName)}&apos;s Sabt Pack is generated and waiting on your review — slideshow, Reel cover, IG Feed, Carousel, GBP image, WhatsApp Status, and a GBP post.
+              </p>
+              ${themeBlock}
+              <p style="margin: 0 0 24px;">
+                <a href="${escapeHtml(input.reviewUrl)}" style="display: inline-block; background: #201A17; color: #FFFFFF; padding: 14px 28px; border-radius: 999px; text-decoration: none; font-weight: 600; font-size: 15px;">Review &amp; approve</a>
+              </p>
+              <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #8A7C6E;">
+                Tap any slot to edit copy on your phone, then approve all 7. Posts are yours to publish on TikTok, Instagram, Google Business, and WhatsApp Status.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 16px 32px 24px; border-top: 1px solid #F2E7D8;">
+              <p style="margin: 0; font-size: 12px; color: #A99A87;">From Bustan — your weekly content, ready before service.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
 }
 
 /** Manual trigger — used by the admin endpoint + CLI. */

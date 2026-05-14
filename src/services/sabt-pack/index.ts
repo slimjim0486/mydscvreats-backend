@@ -74,9 +74,10 @@ export interface RunSabtPackResult {
   slotsPersisted: number;
   totalCostUsd: number;
   themeOfWeek: string | null;
-  /** True when the caller should attempt a WhatsApp delivery. False on
+  /** True when the caller should send the owner notification (email today;
+   *  the channel is the worker's choice, not the orchestrator's). False on
    *  partial/failed and when the project was already delivered/approved. */
-  shouldSendWhatsApp: boolean;
+  shouldNotifyOwner: boolean;
 }
 
 /** Quick guard: a Sabt Pack only ships for Pro/Portfolio restaurants with the
@@ -430,7 +431,7 @@ export async function runSabtPackGeneration(
       slotsPersisted: 0,
       totalCostUsd: 0,
       themeOfWeek: null,
-      shouldSendWhatsApp: false,
+      shouldNotifyOwner: false,
     };
   }
   const capUsd =
@@ -557,7 +558,7 @@ export async function runSabtPackGeneration(
       slotsPersisted: 0,
       totalCostUsd: 0,
       themeOfWeek: null,
-      shouldSendWhatsApp: false,
+      shouldNotifyOwner: false,
     };
   }
 
@@ -739,7 +740,7 @@ export async function runSabtPackGeneration(
     slotsPersisted,
     totalCostUsd,
     themeOfWeek: decision.brandThemeOfWeek,
-    shouldSendWhatsApp: finalStatus === "ready",
+    shouldNotifyOwner: finalStatus === "ready",
   };
 }
 

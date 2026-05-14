@@ -109,11 +109,9 @@ const envSchema = z.object({
   GOOGLE_OAUTH_CLIENT_SECRET: optionalString(),
   GOOGLE_SEARCH_CONSOLE_REFRESH_TOKEN: optionalString(),
   GOOGLE_SEARCH_CONSOLE_PROPERTY: z.string().default("sc-domain:getbustan.com"),
-  // Sabt Pack — weekly auto-generated 7-post bundle. The WhatsApp send is
-  // gated until the `sabt_pack_ready` Meta template clears review; flip this
-  // to true in the staging env first, then production once the template is
-  // approved. When off, the dashboard banner is the only delivery channel.
-  SABT_PACK_WHATSAPP_ENABLED: z.coerce.boolean().default(false),
+  // Sabt Pack — weekly auto-generated 7-post bundle. Owner notification is
+  // delivered via Resend email (gated on RESEND_API_KEY + RESEND_FROM_EMAIL)
+  // plus the always-on dashboard banner. No separate Sabt Pack toggle needed.
   // Per-restaurant weekly USD ceiling. Orchestrator forces menu-photo reuse
   // beyond this cap so a runaway image-gen pass cannot torch the Pro margin.
   SABT_PACK_MAX_USD_PER_RESTAURANT_PER_WEEK: z.coerce.number().nonnegative().default(0.3),

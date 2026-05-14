@@ -50,19 +50,6 @@ export const WHATSAPP_TEMPLATE_LIBRARY = [
     body: "Happy birthday, {{1}}. {{2}} has a birthday treat waiting for you. Reply here to claim it.",
     variables: ["customer_name", "restaurant_name"],
   },
-  {
-    name: "sabt_pack_ready",
-    label: "Sabt Pack ready",
-    type: "sabt_pack_ready",
-    category: "MARKETING",
-    language: "en",
-    // Sent every Sunday morning to the restaurant's WhatsApp Business number
-    // when their weekly 7-post Sabt Pack has finished generating. {{3}} is the
-    // signed dashboard review URL — Meta-approved sample at the same
-    // app.bustan.ai domain (see WhatsApp Manager submission notes).
-    body: "Hi {{1}} — your Sabt Pack is ready. 7 posts for the week made for {{2}}. Tap to review and approve: {{3}}",
-    variables: ["restaurant_name", "cuisine_or_audience", "review_url"],
-  },
 ] as const;
 
 type TemplateName = (typeof WHATSAPP_TEMPLATE_LIBRARY)[number]["name"];
