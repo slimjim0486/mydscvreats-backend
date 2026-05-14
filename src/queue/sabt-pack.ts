@@ -275,7 +275,7 @@ async function sendSabtPackWhatsApp(args: { restaurantId: string; adProjectId: s
     return;
   }
 
-  const reviewUrl = `${env.FRONTEND_APP_URL.replace(/\/$/, "")}/dashboard/sabt-pack/${args.adProjectId}`;
+  const reviewUrl = `${env.FRONTEND_APP_URL.replace(/\/$/, "")}/dashboard/ad-studio/weekly/${args.adProjectId}`;
 
   // Owner-controlled strings (restaurant.name, cuisineType) are passed as
   // template parameters and must be sanitized — Meta rejects sends with

@@ -65,7 +65,7 @@ async function main() {
     );
   }
   if (result.status === "ready" || result.status === "partial") {
-    const reviewUrl = `${process.env.FRONTEND_APP_URL ?? "http://localhost:3000"}/dashboard/sabt-pack/${result.adProjectId}`;
+    const reviewUrl = `${process.env.FRONTEND_APP_URL ?? "http://localhost:3000"}/dashboard/ad-studio/weekly/${result.adProjectId}`;
     console.log(`[sabt-pack-trigger] review surface: ${reviewUrl}`);
   }
 }
