@@ -1162,18 +1162,26 @@ export const crmRoute = new Hono<{
             }
           : baseWhere;
 
-      const candidates = await prisma.customer.findMany({
-        where: customerWhere,
-        orderBy: [{ lastOrderAt: "asc" }, { createdAt: "asc" }],
-        take: 100,
-        include: {
-          consents: {
-            orderBy: { createdAt: "desc" },
-            take: 1,
-            select: { status: true },
+      // Run the segment query and the universe count in parallel.
+      // optedInTotal is the universe (every opted-in customer regardless of
+      // segment) — used downstream so the API response can explain *why*
+      // a segment matched 0 (e.g. "0 of 4 opted-in customers qualify for
+      // 30-day inactive — they need at least one prior order").
+      const [candidates, optedInTotal] = await Promise.all([
+        prisma.customer.findMany({
+          where: customerWhere,
+          orderBy: [{ lastOrderAt: "asc" }, { createdAt: "asc" }],
+          take: 100,
+          include: {
+            consents: {
+              orderBy: { createdAt: "desc" },
+              take: 1,
+              select: { status: true },
+            },
           },
-        },
-      });
+        }),
+        prisma.customer.count({ where: baseWhere }),
+      ]);
       // Final precedence check: only customers whose MOST RECENT consent
       // is opt_in are sent to. If they ever opted out, they're excluded
       // even if marketingOptIn = true (defense-in-depth against flips).
@@ -1488,10 +1496,18 @@ export const crmRoute = new Hono<{
       return c.json({
         campaign: updatedCampaign,
         targeted: customers.length,
-        sent: canSendViaApi ? loggedCount : 0,
+        // In whatsapp_link mode loggedCount represents the rows we wrote
+        // wa.me URLs for — surface that as `sent` so the frontend can show
+        // a non-zero outcome ("Logged N for manual send") instead of "0".
+        sent: loggedCount,
         failed: failedCount,
         skippedFrequency: frequencyCappedCount,
         skippedTier: tierCappedCount,
+        // optedInTotal lets the UI distinguish "you have no opted-in
+        // customers" from "you have opted-in customers but none match
+        // this segment" when targeted === 0.
+        optedInTotal,
+        segment: data.type,
         mode: deliveryMode,
       }, 201);
     } catch (error) {
