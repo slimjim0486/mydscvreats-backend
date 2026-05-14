@@ -25,10 +25,25 @@ export async function sendLifecycleEmail(input: {
     return null;
   }
 
-  return client.emails.send({
+  // The Resend SDK does NOT throw on send failures (unverified domain,
+  // bounced recipient, rate-limit). It returns { data, error } where
+  // error is non-null on failure. Without this check, callers wrap the
+  // call in try/catch, see no exception, and assume success — which is
+  // exactly how a "delivered" status can lie. Throw explicitly so the
+  // caller's existing try/catch + status-update logic stays correct.
+  const result = await client.emails.send({
     from: env.RESEND_FROM_EMAIL,
     to: [input.to],
     subject: input.subject,
     html: input.html,
   });
+
+  if (result.error) {
+    const err = result.error as { name?: string; message?: string };
+    throw new Error(
+      `Resend rejected the send (${err.name ?? "unknown"}): ${err.message ?? JSON.stringify(result.error)}`
+    );
+  }
+
+  return result;
 }
