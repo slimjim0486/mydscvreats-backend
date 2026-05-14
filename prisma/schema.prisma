@@ -25,6 +25,40 @@ enum SubscriptionPlan {
   portfolio
 }
 
+enum SupportTicketStatus {
+  open
+  in_progress
+  waiting_on_customer
+  resolved
+  closed
+}
+
+enum SupportTicketSeverity {
+  sev1
+  sev2
+  sev3
+  sev4
+}
+
+enum SupportTicketPriority {
+  urgent
+  high
+  normal
+  low
+}
+
+enum SupportTicketSource {
+  dashboard
+  sous_chef
+  admin
+}
+
+enum SupportTicketMessageAuthorType {
+  owner
+  admin
+  system
+}
+
 enum DomainStatus {
   pending
   verifying
@@ -213,6 +247,10 @@ model User {
 
   restaurants     Restaurant[]
   operatorAccount OperatorAccount?
+  supportTickets  SupportTicket[]        @relation("SupportTicketOwner")
+  assignedTickets SupportTicket[]        @relation("SupportTicketAssignee")
+  supportMessages SupportTicketMessage[] @relation("SupportMessageAuthor")
+  supportEvents   SupportTicketEvent[]   @relation("SupportEventActor")
 
   @@map("users")
 }
@@ -278,6 +316,10 @@ model Restaurant {
   ownerChatMemories         OwnerChatMemory[]
   ownerWhispers             OwnerWhisper[]
   gscSnapshots              GscSnapshot[]
+  supportTickets            SupportTicket[]
+  supportMessages           SupportTicketMessage[]
+  supportEvents             SupportTicketEvent[]
+  supportAttachments        SupportTicketAttachment[]
 
   @@index([ownerId])
   @@index([operatorAccountId])
@@ -1457,4 +1499,127 @@ model OwnerWhisper {
   @@unique([restaurantId, forDate])
   @@index([restaurantId, generatedAt])
   @@map("owner_whispers")
+}
+
+// =============================================================================
+// SUPPORT — AI-first customer support tickets and admin operations
+// =============================================================================
+
+model SupportTicket {
+  id                    String                 @id @default(cuid())
+  restaurantId          String                 @map("restaurant_id")
+  ownerUserId           String                 @map("owner_user_id")
+  assignedAdminUserId   String?                @map("assigned_admin_user_id")
+  title                 String
+  description           String                 @db.Text
+  status                SupportTicketStatus    @default(open)
+  source                SupportTicketSource    @default(dashboard)
+  planSnapshot          SubscriptionPlan?      @map("plan_snapshot")
+  aiSeverity            SupportTicketSeverity  @default(sev3) @map("ai_severity")
+  adminOverrideSeverity SupportTicketSeverity? @map("admin_override_severity")
+  priority              SupportTicketPriority  @default(normal)
+  priorityScore         Int                    @default(40) @map("priority_score")
+  category              String?
+  aiSummary             String?                @map("ai_summary") @db.Text
+  suggestedResponse     String?                @map("suggested_response") @db.Text
+  aiConfidence          Float?                 @map("ai_confidence")
+  escalationFlags       String[]               @default([]) @map("escalation_flags")
+  triageStatus          String                 @default("pending") @map("triage_status")
+  triageMetadata        Json?                  @map("triage_metadata")
+  resolutionSummary     String?                @map("resolution_summary") @db.Text
+  firstResponseAt       DateTime?              @map("first_response_at")
+  resolvedAt            DateTime?              @map("resolved_at")
+  closedAt              DateTime?              @map("closed_at")
+  createdAt             DateTime               @default(now()) @map("created_at")
+  updatedAt             DateTime               @updatedAt @map("updated_at")
+
+  restaurant    Restaurant                @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  owner         User                      @relation("SupportTicketOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
+  assignedAdmin User?                     @relation("SupportTicketAssignee", fields: [assignedAdminUserId], references: [id], onDelete: SetNull)
+  messages      SupportTicketMessage[]
+  events        SupportTicketEvent[]
+  attachments   SupportTicketAttachment[]
+
+  @@index([restaurantId, status, priority])
+  @@index([ownerUserId, createdAt])
+  @@index([assignedAdminUserId, status])
+  @@index([priority, status, createdAt])
+  @@map("support_tickets")
+}
+
+model SupportTicketMessage {
+  id           String                         @id @default(cuid())
+  ticketId     String                         @map("ticket_id")
+  restaurantId String                         @map("restaurant_id")
+  authorType   SupportTicketMessageAuthorType @map("author_type")
+  authorUserId String?                        @map("author_user_id")
+  body         String                         @db.Text
+  isInternal   Boolean                        @default(false) @map("is_internal")
+  createdAt    DateTime                       @default(now()) @map("created_at")
+
+  ticket      SupportTicket             @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  restaurant  Restaurant                @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  authorUser  User?                     @relation("SupportMessageAuthor", fields: [authorUserId], references: [id], onDelete: SetNull)
+  attachments SupportTicketAttachment[]
+
+  @@index([ticketId, createdAt])
+  @@index([restaurantId, createdAt])
+  @@map("support_ticket_messages")
+}
+
+model SupportTicketEvent {
+  id             String   @id @default(cuid())
+  ticketId       String   @map("ticket_id")
+  restaurantId   String   @map("restaurant_id")
+  actorUserId    String?  @map("actor_user_id")
+  eventType      String   @map("event_type")
+  previous       Json?
+  next           Json?
+  note           String?  @db.Text
+  visibleToOwner Boolean  @default(true) @map("visible_to_owner")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  ticket     SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  restaurant Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  actorUser  User?         @relation("SupportEventActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([ticketId, createdAt])
+  @@index([restaurantId, createdAt])
+  @@map("support_ticket_events")
+}
+
+model SupportTicketAttachment {
+  id           String   @id @default(cuid())
+  ticketId     String   @map("ticket_id")
+  messageId    String?  @map("message_id")
+  restaurantId String   @map("restaurant_id")
+  fileName     String   @map("file_name")
+  contentType  String   @map("content_type")
+  sizeBytes    Int      @map("size_bytes")
+  url          String
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  ticket     SupportTicket         @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  message    SupportTicketMessage? @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  restaurant Restaurant            @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId, createdAt])
+  @@index([messageId])
+  @@map("support_ticket_attachments")
+}
+
+model SupportArticle {
+  id          String   @id @default(cuid())
+  title       String
+  slug        String   @unique
+  question    String   @db.Text
+  answer      String   @db.Text
+  category    String?
+  tags        String[] @default([])
+  isPublished Boolean  @default(false) @map("is_published")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@index([isPublished, category])
+  @@map("support_articles")
 }

@@ -152,6 +152,35 @@ export const OWNER_TOOLS: Anthropic.Tool[] = [
       required: [],
     },
   },
+  {
+    name: "list_support_tickets",
+    description:
+      "List this restaurant's support tickets with status, priority, severity, latest timeline activity, and resolution summary. Only returns tickets for the authenticated restaurant.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        status: {
+          type: "string",
+          enum: ["open", "in_progress", "waiting_on_customer", "resolved", "closed"],
+          description: "Optional status filter.",
+        },
+        limit: { type: "number", description: "Max tickets to return. Default 5, max 20." },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_support_ticket",
+    description:
+      "Get details and visible timeline for a specific support ticket owned by this restaurant. Does not expose internal admin notes.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        ticket_id: { type: "string", description: "Support ticket ID." },
+      },
+      required: ["ticket_id"],
+    },
+  },
 
   // ── WRITE TOOLS ─────────────────────────────────────────────
 
@@ -636,6 +665,10 @@ export async function executeTool(
         return await execGetAiUsage(restaurantId, entitlements);
       case "get_portfolio_overview":
         return await execGetPortfolioOverview(restaurantId, clerkId, entitlements);
+      case "list_support_tickets":
+        return await execListSupportTickets(restaurantId, input);
+      case "get_support_ticket":
+        return await execGetSupportTicket(restaurantId, input);
       case "enhance_descriptions":
         return await execEnhanceDescriptions(restaurantId, clerkId, entitlements, input);
       case "suggest_dietary_tags":
@@ -1189,6 +1222,128 @@ async function execGetPortfolioOverview(
       brandCount: user.operatorAccount.brands.length,
       brandLimit: user.operatorAccount.brandLimit,
       brands: brandStats,
+    }),
+  };
+}
+
+async function execListSupportTickets(restaurantId: string, input: Input): Promise<ToolResult> {
+  const limitRaw = typeof input.limit === "number" ? input.limit : 5;
+  const limit = Math.max(1, Math.min(Math.floor(limitRaw), 20));
+  const status =
+    typeof input.status === "string" &&
+    ["open", "in_progress", "waiting_on_customer", "resolved", "closed"].includes(input.status)
+      ? input.status
+      : undefined;
+
+  const tickets = await prisma.supportTicket.findMany({
+    where: {
+      restaurantId,
+      ...(status ? { status: status as any } : {}),
+    },
+    orderBy: [{ priorityScore: "desc" }, { updatedAt: "desc" }],
+    take: limit,
+    include: {
+      messages: {
+        where: { isInternal: false },
+        orderBy: { createdAt: "desc" },
+        take: 1,
+        select: { body: true, authorType: true, createdAt: true },
+      },
+      events: {
+        where: { visibleToOwner: true },
+        orderBy: { createdAt: "desc" },
+        take: 1,
+        select: { eventType: true, note: true, createdAt: true },
+      },
+    },
+  });
+
+  return {
+    content: JSON.stringify({
+      tickets: tickets.map((ticket) => ({
+        id: ticket.id,
+        title: ticket.title,
+        status: ticket.status,
+        priority: ticket.priority,
+        priorityScore: ticket.priorityScore,
+        severity: ticket.adminOverrideSeverity ?? ticket.aiSeverity,
+        category: ticket.category,
+        summary: ticket.aiSummary,
+        resolutionSummary: ticket.resolutionSummary,
+        createdAt: ticket.createdAt.toISOString(),
+        updatedAt: ticket.updatedAt.toISOString(),
+        latestVisibleMessage: ticket.messages[0]
+          ? {
+              authorType: ticket.messages[0].authorType,
+              body: ticket.messages[0].body,
+              createdAt: ticket.messages[0].createdAt.toISOString(),
+            }
+          : null,
+        latestVisibleEvent: ticket.events[0]
+          ? {
+              eventType: ticket.events[0].eventType,
+              note: ticket.events[0].note,
+              createdAt: ticket.events[0].createdAt.toISOString(),
+            }
+          : null,
+      })),
+    }),
+  };
+}
+
+async function execGetSupportTicket(restaurantId: string, input: Input): Promise<ToolResult> {
+  const ticketId = typeof input.ticket_id === "string" ? input.ticket_id : "";
+  if (!ticketId) {
+    return { content: JSON.stringify({ error: "ticket_id is required." }) };
+  }
+
+  const ticket = await prisma.supportTicket.findFirst({
+    where: { id: ticketId, restaurantId },
+    include: {
+      messages: {
+        where: { isInternal: false },
+        orderBy: { createdAt: "asc" },
+        select: { id: true, authorType: true, body: true, createdAt: true },
+      },
+      events: {
+        where: { visibleToOwner: true },
+        orderBy: { createdAt: "asc" },
+        select: { id: true, eventType: true, note: true, createdAt: true },
+      },
+    },
+  });
+
+  if (!ticket) {
+    return { content: JSON.stringify({ error: "Support ticket not found." }) };
+  }
+
+  return {
+    content: JSON.stringify({
+      id: ticket.id,
+      title: ticket.title,
+      description: ticket.description,
+      status: ticket.status,
+      priority: ticket.priority,
+      priorityScore: ticket.priorityScore,
+      severity: ticket.adminOverrideSeverity ?? ticket.aiSeverity,
+      category: ticket.category,
+      summary: ticket.aiSummary,
+      suggestedResponse: ticket.suggestedResponse,
+      resolutionSummary: ticket.resolutionSummary,
+      createdAt: ticket.createdAt.toISOString(),
+      updatedAt: ticket.updatedAt.toISOString(),
+      messages: ticket.messages.map((message) => ({
+        id: message.id,
+        authorType: message.authorType,
+        body: message.body,
+        createdAt: message.createdAt.toISOString(),
+      })),
+      timeline: ticket.events.map((event) => ({
+        id: event.id,
+        eventType: event.eventType,
+        note: event.note,
+        createdAt: event.createdAt.toISOString(),
+      })),
     }),
   };
 }

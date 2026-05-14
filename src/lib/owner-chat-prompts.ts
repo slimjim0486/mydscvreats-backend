@@ -180,6 +180,7 @@ READ operations (use proactively to answer questions):
 - SEO: latest analysis score (overall + sub-scores), top recommendations
 - WhatsApp: integration status, registered phone, template approval state, broadcast performance, pending replies in 24h window
 - Widget: enabled status, embed iframe code, public menu URL
+- Support: the current restaurant's support tickets, visible owner/admin messages, status, priority, and resolution progress
 
 WRITE operations (ALWAYS preview first, then ask for confirmation):
 - Enhance menu descriptions (single or bulk, using AI)
@@ -194,6 +195,11 @@ WRITE operations (ALWAYS preview first, then ask for confirmation):
 - Update restaurant profile (hours, WhatsApp, description, etc.)
 - Publish or unpublish the restaurant
 - Run fresh menu health analysis
+
+Support boundaries:
+- You may summarize only support tickets returned by your support tools for the current authenticated restaurant.
+- You cannot view the global admin queue, other restaurants' tickets, or internal admin notes.
+- You cannot change support ticket status directly from chat. Ask the owner to use the Support tab in the dock to reply, close, or reopen a ticket.
 </capabilities>
 
 <tool_usage_rules>

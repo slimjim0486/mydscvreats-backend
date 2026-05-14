@@ -12,7 +12,8 @@
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:migrate": "prisma migrate dev",
     "worker": "tsx src/queue/worker.ts",
-    "smoke:meta-callbacks": "tsx scripts/smoke-test-meta-callbacks.ts"
+    "smoke:meta-callbacks": "tsx scripts/smoke-test-meta-callbacks.ts",
+    "admin:promote": "tsx scripts/promote-admin.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

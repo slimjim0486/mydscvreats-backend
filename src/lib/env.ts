@@ -12,6 +12,7 @@ const envSchema = z.object({
   PORT: z.coerce.number().default(3001),
   ANTHROPIC_API_KEY: optionalString(),
   SOUS_CHEF_MODEL: z.string().default("claude-3-5-haiku-20241022"),
+  SUPPORT_TRIAGE_MODEL: z.string().default("claude-sonnet-4-6"),
   GEMINI_API_KEY: optionalString(),
   GOOGLE_API_KEY: optionalString(),
   IP_HASH_PEPPER: isTestEnv

@@ -3,11 +3,16 @@ import type { MiddlewareHandler } from "hono";
 import { ApiError } from "@/lib/errors";
 import { env } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
+import type { User } from "@prisma/client";
 
 export interface AuthContext {
   clerkId: string;
   email: string | null;
   fullName: string | null;
+}
+
+export interface AdminAuthContext extends AuthContext {
+  user: User;
 }
 
 function isNetworkTimeoutError(error: unknown) {
@@ -86,6 +91,23 @@ export const requireAuth: MiddlewareHandler<{
 }> = async (c, next) => {
   const auth = await resolveAuthHeader(c.req.header("authorization"));
   c.set("auth", auth);
+  await next();
+};
+
+export const requireAdmin: MiddlewareHandler<{
+  Variables: {
+    auth: AuthContext;
+    admin: AdminAuthContext;
+  };
+}> = async (c, next) => {
+  const auth = c.get("auth");
+  const user = await getCurrentUser(auth);
+
+  if (user.role !== "admin") {
+    throw new ApiError("Admin access required", 403);
+  }
+
+  c.set("admin", { ...auth, user });
   await next();
 };
 
