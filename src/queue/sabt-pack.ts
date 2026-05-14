@@ -183,20 +183,25 @@ async function processGenerateJob(job: GenerateWorkerJob) {
 
   const result = await runSabtPackGeneration({ restaurantId, weekStartDate });
 
-  if (result.status === "skipped" || result.status === "failed") {
+  if (result.status === "failed") {
     return;
   }
 
+  // `shouldNotifyOwner` is the single source of truth for whether to send
+  // the email. It's true on fresh `ready` packs AND on re-runs that hit
+  // an existing `ready` pack (where the previous email send failed). It's
+  // false for `delivered`, `approved`, `generating`, `partial`, and any
+  // pack that's not full strength.
   if (!result.shouldNotifyOwner) {
-    // Partial pack — banner only.
-    console.log(
-      `[sabt-pack] ${restaurantId} ${weekStartDate} partial=${result.slotsPersisted}/7 (banner-only)`
-    );
+    if (result.status === "partial") {
+      console.log(
+        `[sabt-pack] ${restaurantId} ${weekStartDate} partial=${result.slotsPersisted}/7 (banner-only)`
+      );
+    }
     return;
   }
 
   await sendSabtPackEmail({
-    restaurantId,
     adProjectId: result.adProjectId,
     themeOfWeek: result.themeOfWeek,
   });
@@ -204,36 +209,50 @@ async function processGenerateJob(job: GenerateWorkerJob) {
 
 /** Sunday-morning email to the restaurant owner. Updates `sabt_pack_delivered_at`
  *  on success. Errors do NOT bubble to the worker because an email outage shouldn't
- *  reset a successful pack to "generating" — the banner is the always-on fallback. */
+ *  reset a successful pack to "generating" — the banner is the always-on fallback.
+ *
+ *  Resolves the restaurant by walking from `adProjectId` → AdProject → Restaurant
+ *  → Owner, so callers don't have to know whether the job payload contains a
+ *  cuid or a slug. The AdProject row was just written by the orchestrator and
+ *  always carries the canonical Restaurant cuid in its restaurantId column. */
 async function sendSabtPackEmail(args: {
-  restaurantId: string;
   adProjectId: string;
   themeOfWeek: string | null;
 }) {
   if (!env.RESEND_API_KEY || !env.RESEND_FROM_EMAIL) {
     console.log(
-      `[sabt-pack] ${args.restaurantId} email not configured; banner-only delivery`
+      `[sabt-pack] ${args.adProjectId} email not configured; banner-only delivery`
     );
     return;
   }
 
-  const restaurant = await prisma.restaurant.findUnique({
-    where: { id: args.restaurantId },
+  const project = await prisma.adProject.findUnique({
+    where: { id: args.adProjectId },
     select: {
-      id: true,
-      name: true,
-      owner: { select: { email: true, fullName: true } },
+      sabtPackThemeOfWeek: true,
+      restaurant: {
+        select: {
+          id: true,
+          name: true,
+          owner: { select: { email: true, fullName: true } },
+        },
+      },
     },
   });
 
-  if (!restaurant?.owner?.email) {
+  if (!project?.restaurant?.owner?.email) {
     console.warn(
-      `[sabt-pack] ${args.restaurantId} no owner email; banner-only delivery`
+      `[sabt-pack] ${args.adProjectId} no owner email; banner-only delivery`
     );
     return;
   }
 
+  const restaurant = project.restaurant;
   const reviewUrl = `${env.FRONTEND_APP_URL.replace(/\/$/, "")}/dashboard/ad-studio/weekly/${args.adProjectId}`;
+  // Prefer the caller-supplied theme (fresh from the strategy pass) but fall
+  // back to the persisted value when the worker is re-firing the email for
+  // a pack generated on an earlier run.
+  const themeOfWeek = args.themeOfWeek ?? project.sabtPackThemeOfWeek ?? null;
 
   try {
     await sendLifecycleEmail({
@@ -242,7 +261,7 @@ async function sendSabtPackEmail(args: {
       html: buildSabtPackEmailHtml({
         ownerName: restaurant.owner.fullName,
         restaurantName: restaurant.name,
-        themeOfWeek: args.themeOfWeek,
+        themeOfWeek,
         reviewUrl,
       }),
     });
@@ -254,11 +273,11 @@ async function sendSabtPackEmail(args: {
         sabtPackDeliveredAt: new Date(),
       },
     });
-    console.log(`[sabt-pack] ${args.restaurantId} delivered via email`);
+    console.log(`[sabt-pack] ${restaurant.id} delivered via email`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn(
-      `[sabt-pack] email send failed for ${args.restaurantId}; pack remains ready:`,
+      `[sabt-pack] email send failed for ${restaurant.id}; pack remains ready:`,
       message
     );
     // Don't mark delivered; banner stays visible.

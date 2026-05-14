@@ -561,13 +561,19 @@ export async function runSabtPackGeneration(
         `${FUNCTION_TAG} ${restaurantId} ${weekStartDate} already ${claim.status}; skipping`
       );
     }
+    // "ready" means the pack was generated but the email hasn't been
+    // confirmed sent yet (transient Resend failure, missing creds at the
+    // time, etc.). Allow the worker to retry the notification on a re-run.
+    // "delivered" / "approved" / "generating" never re-fire — those are
+    // either truly done or in-flight by another worker.
+    const shouldRetryNotify = claim.status === "ready";
     return {
       adProjectId: claim.adProjectId,
       status: "skipped",
       slotsPersisted: 0,
       totalCostUsd: 0,
       themeOfWeek: null,
-      shouldNotifyOwner: false,
+      shouldNotifyOwner: shouldRetryNotify,
     };
   }
 
