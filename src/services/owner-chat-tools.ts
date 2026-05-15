@@ -1,4 +1,10 @@
 import type Anthropic from "@anthropic-ai/sdk";
+import {
+  type BustanKbTopic,
+  getAllBustanTopics,
+  getBustanKbEntry,
+  resolveBustanTopic,
+} from "@/lib/bustan-kb";
 import { getRestaurantEntitlements, type PlanEntitlements } from "@/lib/entitlements";
 import {
   createPendingAction,
@@ -572,6 +578,30 @@ export const OWNER_TOOLS: Anthropic.Tool[] = [
       required: [],
     },
   },
+
+  // ── BUSTAN PLATFORM KB ────────────────────────────────────────
+  {
+    name: "get_bustan_info",
+    description:
+      "Look up an accurate, current fact about Bustan itself — pricing, plans, the free trial, AI feature limits, signup flow, WhatsApp integration, data privacy, refunds, support, languages, or how the platform works. ALWAYS call this tool first when the owner asks anything about Bustan as a product (pricing, what's included on another tier, refunds, deletion, Arabic support, etc.). Never guess Bustan facts from memory.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        topic: {
+          type: "string",
+          enum: getAllBustanTopics(),
+          description:
+            "Topic key. Pick the closest match: overview, pricing, trial, signup, ai_features, menu_import, public_page, whatsapp, languages, data_privacy, refunds, support, for_owners.",
+        },
+        query: {
+          type: "string",
+          description:
+            "Optional: the owner's original question. If you're unsure which topic fits, leave topic empty and pass the question here — we auto-resolve.",
+        },
+      },
+      required: [],
+    },
+  },
 ];
 
 // ── Execution ──────────────────────────────────────────────────
@@ -730,6 +760,10 @@ export async function executeTool(
       case "get_widget_status":
         return await execGetWidgetStatus(targetId);
 
+      // Bustan platform KB
+      case "get_bustan_info":
+        return execGetBustanInfo(input);
+
       default:
         return { content: JSON.stringify({ error: `Unknown tool: ${toolName}` }) };
     }
@@ -740,6 +774,34 @@ export async function executeTool(
 }
 
 // ── READ Tool Implementations ──────────────────────────────────
+
+function execGetBustanInfo(input: Input): ToolResult {
+  const allTopics = getAllBustanTopics();
+  const requestedTopic =
+    typeof input.topic === "string" ? input.topic : undefined;
+  const query = typeof input.query === "string" ? input.query : undefined;
+
+  let topic: BustanKbTopic | null = null;
+  if (requestedTopic && (allTopics as string[]).includes(requestedTopic)) {
+    topic = requestedTopic as BustanKbTopic;
+  }
+  if (!topic && query) {
+    topic = resolveBustanTopic(query);
+  }
+  if (!topic) {
+    topic = "overview";
+  }
+
+  const entry = getBustanKbEntry(topic);
+  return {
+    content: JSON.stringify({
+      topic: entry.topic,
+      summary: entry.summary,
+      links: entry.links ?? [],
+      note: "Verbatim Bustan platform fact for this topic. Use this in your reply rather than guessing. Cite the most relevant link when it helps the owner take action.",
+    }),
+  };
+}
 
 async function execGetMenuOverview(restaurantId: string): Promise<ToolResult> {
   const sections = await prisma.menuSection.findMany({
