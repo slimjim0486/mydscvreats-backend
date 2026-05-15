@@ -48,7 +48,7 @@ export const gscRoute = new Hono<{
     const startPrior = new Date(startCurrent);
     startPrior.setUTCDate(startPrior.getUTCDate() - days);
 
-    const [currentRows, priorRows] = await Promise.all([
+    const [currentRows, priorRows, freshness] = await Promise.all([
       prisma.gscSnapshot.findMany({
         where: { restaurantId, date: { gte: startCurrent, lt: now } },
         orderBy: { date: "asc" },
@@ -64,6 +64,14 @@ export const gscRoute = new Hono<{
       prisma.gscSnapshot.findMany({
         where: { restaurantId, date: { gte: startPrior, lt: startCurrent } },
         select: { impressions: true, clicks: true, ctr: true, position: true },
+      }),
+      // Latest sync timestamp across ALL snapshots for this restaurant (not
+      // just the window). Tells the UI when GSC last wrote to us — surfaces
+      // silent staleness if the cron has been failing.
+      prisma.gscSnapshot.findFirst({
+        where: { restaurantId },
+        orderBy: { createdAt: "desc" },
+        select: { createdAt: true },
       }),
     ]);
 
@@ -98,6 +106,7 @@ export const gscRoute = new Hono<{
       gated: false,
       plan: entitlements.plan,
       days,
+      lastSyncedAt: freshness?.createdAt?.toISOString() ?? null,
       totals: {
         impressions: currentImpressions,
         clicks: currentClicks,

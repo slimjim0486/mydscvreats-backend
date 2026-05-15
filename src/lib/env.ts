@@ -109,6 +109,11 @@ const envSchema = z.object({
   GOOGLE_OAUTH_CLIENT_SECRET: optionalString(),
   GOOGLE_SEARCH_CONSOLE_REFRESH_TOKEN: optionalString(),
   GOOGLE_SEARCH_CONSOLE_PROPERTY: z.string().default("sc-domain:getbustan.com"),
+  // Sentry — error monitoring. Optional. When unset, the Sentry wrapper
+  // (lib/sentry.ts) becomes a no-op so the app runs normally without it.
+  // Paste the DSN from sentry.io into Railway when ready.
+  SENTRY_DSN: optionalString(),
+  SENTRY_ENVIRONMENT: optionalString(),
   // Sabt Pack — weekly auto-generated 7-post bundle. Owner notification is
   // delivered via Resend email (gated on RESEND_API_KEY + RESEND_FROM_EMAIL)
   // plus the always-on dashboard banner. Per-restaurant weekly USD ceiling

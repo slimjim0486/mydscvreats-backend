@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { env } from "@/lib/env";
+import { initSentry } from "@/lib/sentry";
 import { seedReferenceData } from "@/lib/startup-seed";
 import { startMenuImageWorker } from "@/queue/image-generation";
 import { startAdStudioWorker } from "@/queue/ad-studio-jobs";
@@ -40,6 +41,8 @@ import { whatsappRoute } from "@/routes/whatsapp";
 import { whatsappWebhooksRoute } from "@/routes/whatsapp-webhooks";
 import { metaDataDeletionRoute } from "@/routes/meta-data-deletion";
 import { clerkWebhooksRoute } from "@/routes/clerk-webhooks";
+
+initSentry();
 
 const app = new Hono();
 

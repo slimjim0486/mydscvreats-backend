@@ -9,6 +9,7 @@
 // will log loudly — re-run scripts/get-gsc-refresh-token.ts to mint a new one.
 
 import { env } from "@/lib/env";
+import { captureException } from "@/lib/sentry";
 
 const OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const SC_API_BASE = "https://www.googleapis.com/webmasters/v3";
@@ -51,7 +52,17 @@ async function getAccessToken(): Promise<string> {
   if (!response.ok) {
     const text = await response.text().catch(() => "");
     cachedAccessToken = null;
-    throw new Error(`GSC token refresh failed (${response.status}): ${text}`);
+    const error = new Error(
+      `GSC token refresh failed (${response.status}): ${text}`
+    );
+    // 400/401 from oauth2.googleapis.com on a refresh_token grant almost
+    // always means the token was revoked — every dashboard goes dark until
+    // someone re-runs scripts/get-gsc-refresh-token.ts. Loud alert.
+    captureException(error, {
+      tags: { service: "gsc", scope: "token-refresh" },
+      extra: { status: response.status, body: text },
+    });
+    throw error;
   }
 
   const payload = (await response.json()) as {
