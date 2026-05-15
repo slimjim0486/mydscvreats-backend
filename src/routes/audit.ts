@@ -295,13 +295,24 @@ export const auditRoute = new Hono()
     try {
       const report = await prisma.auditReport.findUnique({
         where: { slug: c.req.param("slug") },
+        include: {
+          _count: {
+            select: { leads: true },
+          },
+        },
       });
 
       if (!report) {
         throw new ApiError("Audit report not found", 404);
       }
 
-      return c.json(serializeReport(report));
+      // hasLead drives the preview/full-report gate on the frontend. We
+      // never leak phone/email out of this endpoint — the count is enough.
+      const { _count, ...rest } = report;
+      return c.json({
+        ...serializeReport(rest),
+        hasLead: (_count?.leads ?? 0) > 0,
+      });
     } catch (error) {
       return errorResponse(c, error);
     }
