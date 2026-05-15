@@ -126,7 +126,7 @@ export async function suggestDietaryTags(
   const response = await client.messages.create({
     model: "claude-sonnet-4-6",
     max_tokens: 16384,
-    system: `You are a food allergen and dietary classification expert analyzing a Dubai restaurant menu.
+    system: `You are a food allergen and dietary classification expert analyzing a Gulf restaurant menu (UAE-first, with KSA/GCC restaurants also using the platform).
 
 Available tags: ${VALID_TAG_KEYS.join(", ")}
 
@@ -134,7 +134,7 @@ Rules:
 - Be CONSERVATIVE: only tag what is confidently inferable from the dish name and description
 - For allergens (contains_nuts, contains_shellfish, etc.), flag when the ingredient is LIKELY present
 - For dietary tags (vegetarian, vegan, etc.), only tag if the dish clearly qualifies
-- Most Dubai restaurants serve halal food — tag "halal" if the cuisine suggests it (Arabic, Indian, Pakistani, Turkish, etc.)
+- Most Gulf restaurants serve halal food — tag "halal" if the cuisine suggests it (Arabic, Indian, Pakistani, Turkish, etc.)
 - Confidence: 0.9+ = very confident, 0.7-0.89 = likely, 0.5-0.69 = possible
 - Only include tags with confidence >= 0.5
 - Keep "reasoning" to 5 words max

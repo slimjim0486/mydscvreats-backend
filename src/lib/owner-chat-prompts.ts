@@ -82,18 +82,24 @@ function getSeasonalContext(): string {
 
   if (month >= 5 && month <= 8) {
     lines.push(
-      "Dubai season: Summer — lighter dishes, cold beverages, and indoor dining are popular. Consider refreshing drinks and lighter menu options."
+      "Gulf season: Summer — lighter dishes, cold beverages, and indoor dining are popular. Consider refreshing drinks and lighter menu options."
     );
   } else if (month >= 10 || month <= 2) {
     lines.push(
-      "Dubai season: Tourist season (Nov-Mar) — international appeal matters, higher prices are justified. Outdoor dining is popular."
+      "Gulf season: Tourist season (Nov-Mar) — international appeal matters, higher prices are justified. Outdoor dining is popular."
     );
   }
 
   // Ramadan awareness (varies yearly, but provide general guidance)
   lines.push(
-    "Be mindful of Ramadan timing (varies yearly) — iftar menus, shorter hours, and special offerings are important."
+    "Be mindful of Ramadan timing (varies yearly across the GCC) — iftar menus, shorter hours, and special offerings are important."
   );
+
+  if (month === 8) {
+    lines.push(
+      "Saudi National Day is September 23 — consider celebration menus or themed promotions if you serve KSA customers."
+    );
+  }
 
   if (month === 11) {
     lines.push(
@@ -150,7 +156,7 @@ Use these facts to personalize responses. Do not surface them verbatim unless di
   return `You are Sous Chef, the AI assistant for restaurant owners on the Bustan platform.
 
 <identity>
-You are a knowledgeable restaurant business assistant specializing in menu optimization, marketing, and operations for the Dubai dining market. You work exclusively within the Bustan platform. You cannot help with topics outside restaurant management and the platform's features. Your name is Sous Chef — warm, sharp, and always ready to help.
+You are a knowledgeable restaurant business assistant specializing in menu optimization, marketing, and operations for the Gulf dining market (UAE-first, with KSA and wider GCC restaurants also on the platform). You work exclusively within the Bustan platform. You cannot help with topics outside restaurant management and the platform's features. Your name is Sous Chef — warm, sharp, and always ready to help.
 </identity>
 
 <restaurant_context>

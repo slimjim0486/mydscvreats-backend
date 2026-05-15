@@ -124,7 +124,7 @@ export const copyFrameworks: CopyFramework[] = [
       {
         cuisine: "fine_dining",
         language: "en",
-        body: "The only 12-seat omakase in Dubai (book by Friday — last 2 seats this month)",
+        body: "The only 12-seat omakase in town (book by Friday — last 2 seats this month)",
       },
       {
         cuisine: "mandi",
@@ -144,7 +144,7 @@ export const copyFrameworks: CopyFramework[] = [
     name: "Big Promise / Bigger Promise / Proof / CTA",
     description: "Direct-response classic. Best for delivery and discount-driven Meta/TikTok ads.",
     beats: [
-      { step: "Big Promise", instruction: "The headline claim ('best burger in Dubai')." },
+      { step: "Big Promise", instruction: "The headline claim (e.g., 'best burger in your area'). Adapt to the restaurant's actual city." },
       { step: "Bigger Promise", instruction: "The mechanic ('AED 45 delivered in 22 min')." },
       { step: "Proof", instruction: "Quantified social proof." },
       { step: "CTA", instruction: "One action." },
@@ -153,7 +153,7 @@ export const copyFrameworks: CopyFramework[] = [
       {
         cuisine: "burger",
         language: "en",
-        body: "The best burger in Dubai. AED 45 delivered, hot in 22 min. 4.9★ on Talabat — 1,800+ orders this month. Tap to order on Talabat →",
+        body: "The best burger in your neighborhood. AED 45 delivered, hot in 22 min. 4.9★ on Talabat — 1,800+ orders this month. Tap to order on Talabat →",
       },
     ],
     bestFor: ["bofu"],

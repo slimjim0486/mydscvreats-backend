@@ -57,13 +57,13 @@ export async function enhanceSingleDescription(
   const response = await client.messages.create({
     model: "claude-sonnet-4-6",
     max_tokens: 300,
-    system: `You are a menu copywriter for Dubai restaurants. Write a single compelling menu description.
+    system: `You are a menu copywriter for Gulf restaurants. Write a single compelling menu description.
 
 Rules:
 - Keep under 180 characters
 - Use sensory language (taste, texture, aroma)
 - Never invent ingredients not implied by the dish name
-- Be culturally appropriate for Dubai's dining scene
+- Be culturally appropriate for the Gulf dining scene
 - ${toneDirective}
 - Return ONLY the description text, nothing else`,
     messages: [
@@ -71,7 +71,7 @@ Rules:
         role: "user",
         content: `Restaurant: ${restaurant.name}
 Cuisine: ${restaurant.cuisineType ?? "International"}
-Location: ${restaurant.location ?? "Dubai"}
+Location: ${restaurant.location ?? "the UAE"}
 Section: ${item.sectionName}
 Dish: ${item.name}
 Price: AED ${item.price}
@@ -135,13 +135,13 @@ export async function enhanceBulkDescriptions(
   const response = await client.messages.create({
     model: "claude-sonnet-4-6",
     max_tokens: 8192,
-    system: `You are a menu copywriter for Dubai restaurants. Write compelling descriptions for multiple menu items, maintaining a consistent voice.
+    system: `You are a menu copywriter for Gulf restaurants. Write compelling descriptions for multiple menu items, maintaining a consistent voice.
 
 Rules:
 - Keep each description under 180 characters
 - Use sensory language (taste, texture, aroma)
 - Never invent ingredients not implied by the dish name
-- Be culturally appropriate for Dubai's dining scene
+- Be culturally appropriate for the Gulf dining scene
 - ${toneDirective}
 - Maintain consistent voice across all items
 - Return ONLY valid JSON: { "suggestions": { "itemId": "description", ... } }`,
@@ -150,7 +150,7 @@ Rules:
         role: "user",
         content: `Restaurant: ${restaurant.name}
 Cuisine: ${restaurant.cuisineType ?? "International"}
-Location: ${restaurant.location ?? "Dubai"}
+Location: ${restaurant.location ?? "the UAE"}
 
 Menu items to enhance:
 ${menuListing}
@@ -201,7 +201,7 @@ export async function suggestPromotionContent(
 
   const toneDirective = tone
     ? `Write in a ${tone} tone.`
-    : "Write in a warm, commercially sharp tone appropriate for Dubai restaurant marketing.";
+    : "Write in a warm, commercially sharp tone appropriate for Gulf restaurant marketing.";
 
   const itemListing = promotion.items
     .map(
@@ -263,7 +263,7 @@ export async function suggestPromotionContent(
   const response = await client.messages.create({
     model: "claude-sonnet-4-6",
     max_tokens: 900,
-    system: `You are Sous Chef, an AI copy strategist for restaurant offers in Dubai. Generate offer copy for a restaurant owner.
+    system: `You are Sous Chef, an AI copy strategist for restaurant offers in the Gulf. Generate offer copy for a restaurant owner.
 
 Offer-type guidance:
 ${typeGuidance[promotion.type] ?? ""}
@@ -295,7 +295,7 @@ Rules:
         role: "user",
         content: `Restaurant: ${restaurant.name}
 Cuisine: ${restaurant.cuisineType ?? "International"}
-Location: ${restaurant.location ?? "Dubai"}
+Location: ${restaurant.location ?? "the UAE"}
 Offer type: ${promotion.type}
 
 Selected dishes:

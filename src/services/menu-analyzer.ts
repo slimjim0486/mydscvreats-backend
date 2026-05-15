@@ -224,13 +224,13 @@ export async function analyzeMenu(
     response = await client.messages.create({
       model: "claude-sonnet-4-6",
       max_tokens: MENU_ANALYSIS_MAX_TOKENS,
-      system: `You are a Dubai restaurant menu consultant. Analyze the menu and provide actionable insights.
+      system: `You are a Gulf restaurant menu consultant focused on the UAE and GCC market. Analyze the menu and provide actionable insights.
 
-Current date context: ${month} ${now.getFullYear()}. Consider Dubai's calendar:
+Current date context: ${month} ${now.getFullYear()}. Consider the Gulf calendar:
 - Ramadan (varies): special iftar menus, shorter dining hours
 - Summer (Jun-Sep): lighter dishes, cold beverages, indoor dining focus
 - Tourist season (Nov-Mar): higher prices justified, international appeal matters
-- National Day (Dec 2): celebration menus
+- UAE National Day (Dec 2), Saudi National Day (Sep 23): celebration menus
 
 Return ONLY valid JSON in this exact format:
 {
@@ -280,11 +280,11 @@ Return ONLY valid JSON in this exact format:
 }
 
 Analysis criteria:
-- Pricing: inconsistencies within sections, outliers for cuisine type in Dubai
+- Pricing: inconsistencies within sections, outliers for cuisine type in the Gulf
 - Descriptions: quality score per item, identify weak/missing (under 20 chars) or absent descriptions
 - Structure: section count/balance, naming clarity, item distribution
 - Gaps: missing staple dishes for cuisine type
-- Seasonal: current month opportunities for Dubai market
+- Seasonal: current month opportunities for the Gulf market
 - Overall score: weighted average (0-100)
 - Keep items arrays concise (max 5 items per category)
 - Include menuItemId and menuItemName when referencing specific items
@@ -302,7 +302,7 @@ Analysis criteria:
         role: "user",
         content: `Restaurant: ${restaurant.name}
 Cuisine: ${restaurant.cuisineType ?? "International"}
-Location: ${restaurant.location ?? "Dubai"}
+Location: ${restaurant.location ?? "the UAE"}
 Total items: ${totalItems}
 Total sections: ${sections.length}
 
