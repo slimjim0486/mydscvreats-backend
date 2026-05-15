@@ -22,6 +22,9 @@ export type BustanKbTopic =
   | "public_page"
   | "whatsapp"
   | "whatsapp_compliance"
+  | "google_integrations"
+  | "portfolio"
+  | "growth_tools"
   | "languages"
   | "data_privacy"
   | "refunds"
@@ -38,7 +41,7 @@ export const BUSTAN_KB: Record<BustanKbTopic, BustanKbEntry> = {
   overview: {
     topic: "overview",
     summary:
-      "Bustan is a growth platform built for UAE restaurants. It hosts a beautiful public menu page (like the one you're looking at), and gives the restaurant owner tools to keep diners coming back via WhatsApp campaigns, AI-generated ads, and SEO. Bustan is a trading name of Jasmine Entertainment FZE in Sharjah Publishing City, UAE.",
+      "Bustan is a growth platform built for UAE restaurants. It bundles: (a) a hosted public menu page at getbustan.com/their-slug with AI-extracted menu, photos, dietary tags, operating hours, and Sous Chef diner chat; (b) a WhatsApp CRM that connects the restaurant's real WhatsApp Business Account and runs campaigns to opted-in customers; (c) Ad Creative Studio for Meta ads and a weekly Sabt Pack of 7 ready-to-publish social posts; (d) Google integrations — Google Business Profile (for review stars on the public page and SEO inputs), Google Search Console (Pro+ read-only impressions/clicks dashboard), and an SEO scorecard across 5 pillars including a rank grid for local keywords; (e) a portfolio dashboard for operators managing up to 3 brands (more via AED 99/extra); and (f) growth tools — embeddable menu widget, short links, QR codes, locations directory pages at getbustan.com/locations/[city]/[neighborhood]. Bustan is a trading name of Jasmine Entertainment FZE in Sharjah Publishing City, UAE.",
     links: ["https://getbustan.com", "https://getbustan.com/help"],
   },
   pricing: {
@@ -92,6 +95,24 @@ export const BUSTAN_KB: Record<BustanKbTopic, BustanKbEntry> = {
       "https://getbustan.com/faq#whatsapp-compliance",
     ],
   },
+  google_integrations: {
+    topic: "google_integrations",
+    summary:
+      "Bustan integrates with Google in three ways. (1) Google Business Profile (Dashboard → Google Business): the owner pastes their GBP URL and Bustan uses it to display aggregate rating + review count as ⭐ stars on the public menu page (via AggregateRating JSON-LD that Google can surface in search results) and to feed the SEO scorecard. Today this is a self-reported URL link, not a two-way API sync — direct GBP API integration (auto-push hours, photos, menu to Google) is on the medium-term roadmap. (2) Google Search Console (Dashboard → Search Console, Pro+): a read-only dashboard showing impressions, clicks, click-through rate, average position, and top queries for the restaurant's Bustan page. Bustan runs a single shared GSC property and slices the data per restaurant by URL path, so owners don't have to authenticate anything — it works as soon as Google has crawled the published page (3–14 days). (3) SEO scorecard (Dashboard → SEO Analysis, Pro+): a 0–100 score across 5 weighted pillars — Google Business Profile (25%), on-page SEO (20%), rank grid for ~100 geo-points on local keywords (20%), citations across Google/Talabat/Deliveroo/directories (20%), and reviews (15%). Pro gets 2 scans/month, Portfolio gets 4 scans/month per brand. Results cache for 7 days. Bustan also ships full schema.org markup (Restaurant, Menu, AggregateRating, breadcrumbs), a dynamic sitemap, and an llms.txt for AI assistants — so the page is Google-ready out of the box without owner config.",
+    links: ["https://getbustan.com/help#seo"],
+  },
+  portfolio: {
+    topic: "portfolio",
+    summary:
+      "Portfolio is Bustan's plan for operators managing multiple brands from one account. AED 499.99/month flat covers up to 3 brands; additional brands are AED 99/month each. Portfolio unlocks: a brand switcher in the sidebar (flip between brands in one click), menu cloning (duplicate a menu or section from one brand to another with per-brand price overrides), cross-brand analytics (combined view of traffic, top dishes, WhatsApp engagement), per-brand QR generator, and a portfolio-wide SEO scorecard. Each brand keeps its own live restaurant page, menu, photos, WhatsApp CRM connection, AI quotas, and analytics — entitlements like dish image gen (300/mo per brand), Ad Studio (20 projects/mo per brand), and Sous Chef (2,000 msgs/mo per brand) are independent per brand, not shared across the portfolio. Pro users can upgrade to Portfolio anytime; the existing restaurant becomes brand #1 and they add the rest from Dashboard → Portfolio → Add brand. Cross-brand analytics and brand switcher unlock once 3 brands are set up.",
+    links: ["https://getbustan.com/help#portfolio"],
+  },
+  growth_tools: {
+    topic: "growth_tools",
+    summary:
+      "Beyond the menu page itself, Bustan ships several growth surfaces for Pro and Portfolio restaurants: (a) Embeddable widget — an iframe snippet at Dashboard → Widget that the owner pastes into their own website to render the full menu inline. (b) Short links — getbustan.com/r/XXXXXXX that redirect to the public page with separate click tracking, useful for offline-to-online conversion from flyers, table tents, and Instagram bios. (c) QR codes — auto-generated for the short link, downloadable for printing. (d) Locations directory — public discovery pages at getbustan.com/locations/[city]/[neighborhood] that group published restaurants by area; restaurants appear automatically once published. (e) Powered-by-Bustan footer — a tasteful link back to bustan on the public page, removable on Pro and Portfolio via Appearance → Branding. (f) PDF menu export — a print-ready PDF version of the menu with QR code back to the digital page. Together these turn every public page, embed, printed menu, and QR scan into a source of trackable traffic.",
+    links: ["https://getbustan.com/help#public-page"],
+  },
   languages: {
     topic: "languages",
     summary:
@@ -128,7 +149,11 @@ export const BUSTAN_KB: Record<BustanKbTopic, BustanKbEntry> = {
 };
 
 const TOPIC_KEYWORDS: Record<BustanKbTopic, string[]> = {
-  overview: ["bustan", "what is", "what's bustan", "who made", "company"],
+  // Keep `overview` narrow — it's the fallback when no specific topic matches,
+  // so don't over-claim broad keywords here or you'll shadow more specific
+  // topics. The resolver picks the longest-keyword match; keep these short
+  // and identity-focused.
+  overview: ["what is bustan", "what's bustan", "who made bustan", "company", "jasmine entertainment"],
   pricing: ["price", "pricing", "cost", "how much", "plan", "subscription", "monthly", "aed", "portfolio plan", "pro plan"],
   trial: ["trial", "free trial", "14 day", "14-day", "try it"],
   signup: ["sign up", "signup", "join bustan", "register", "create account", "list my restaurant", "get on bustan"],
@@ -164,6 +189,76 @@ const TOPIC_KEYWORDS: Record<BustanKbTopic, string[]> = {
     "warm up",
     "warmup",
     "list import",
+  ],
+  google_integrations: [
+    "google",
+    "google business",
+    "google business profile",
+    "gbp",
+    "google my business",
+    "gmb",
+    "search console",
+    "google search console",
+    "gsc",
+    "google search",
+    "seo",
+    "seo score",
+    "seo scorecard",
+    "seo analysis",
+    "rank",
+    "ranking",
+    "rankings",
+    "rank grid",
+    "rank tracking",
+    "local seo",
+    "citations",
+    "directory listing",
+    "directory listings",
+    "review count",
+    "review stars",
+    "star rating",
+    "aggregate rating",
+    "schema",
+    "json-ld",
+    "structured data",
+    "sitemap",
+    "llms.txt",
+  ],
+  portfolio: [
+    "portfolio",
+    "multi brand",
+    "multi-brand",
+    "multiple brands",
+    "multiple restaurants",
+    "brand switcher",
+    "menu cloning",
+    "clone menu",
+    "extra brand",
+    "cross-brand",
+    "cross brand",
+    "operator account",
+    "chain",
+    "multi location",
+    "multi-location",
+  ],
+  growth_tools: [
+    "widget",
+    "embed",
+    "embeddable",
+    "iframe",
+    "short link",
+    "short links",
+    "shortlink",
+    "qr",
+    "qr code",
+    "qr codes",
+    "powered by",
+    "branding",
+    "pdf export",
+    "print menu",
+    "locations directory",
+    "locations page",
+    "neighborhood",
   ],
   languages: ["arabic", "english", "language", "translate", "bilingual", "rtl"],
   data_privacy: ["privacy", "data", "gdpr", "pdpl", "delete my data", "data deletion", "tracking", "cookies"],
