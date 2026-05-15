@@ -14,6 +14,7 @@ import {
 } from "@/lib/owner-chat-prompts";
 import { prisma } from "@/lib/prisma";
 import { getBoss } from "@/queue/image-generation";
+import { createSousChefMessage } from "@/services/anthropic-models";
 
 export const OWNER_CHAT_MEMORY_FANOUT_JOB = "owner-chat-memory-fanout";
 export const OWNER_CHAT_MEMORY_EXTRACT_JOB = "owner-chat-memory-extract";
@@ -245,12 +246,14 @@ async function processExtractJob(job: ExtractWorkerJob) {
   );
 
   const client = getClient();
-  const response = await client.messages.create({
-    model: env.SOUS_CHEF_MODEL,
+  const response = await createSousChefMessage(client, {
     max_tokens: 800,
     system:
       "You are a memory-extraction utility. Output ONLY strict JSON matching the schema in the user prompt. No prose, no markdown fences.",
     messages: [{ role: "user", content: prompt }],
+  }, {
+    route: "owner-chat-memory",
+    restaurantId,
   });
 
   const rawText = response.content

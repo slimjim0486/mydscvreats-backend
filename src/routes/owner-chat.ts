@@ -10,6 +10,7 @@ import { buildOwnerSystemPrompt } from "@/lib/owner-chat-prompts";
 import { prisma } from "@/lib/prisma";
 import { assertRateLimit } from "@/lib/public-request-guards";
 import { requireAuth } from "@/middleware/auth";
+import { createSousChefMessage } from "@/services/anthropic-models";
 import { OWNER_TOOLS, executeTool } from "@/services/owner-chat-tools";
 import { enqueueExtractionForRestaurant } from "@/queue/owner-chat-memory";
 import { enqueueWhisperForRestaurant } from "@/queue/owner-whisper";
@@ -565,12 +566,16 @@ export const ownerChatRoute = new Hono<{
 
           try {
             while (iterations <= MAX_TOOL_ITERATIONS) {
-              const response = await client.messages.create({
-                model: env.SOUS_CHEF_MODEL,
+              const response = await createSousChefMessage(client, {
                 max_tokens: 1024,
                 system: systemPrompt,
                 tools: OWNER_TOOLS,
                 messages,
+              }, {
+                route: "owner-chat",
+                restaurantId,
+                clerkId: auth.clerkId,
+                iteration: iterations,
               });
 
               totalInputTokens += response.usage.input_tokens;

@@ -14,6 +14,7 @@ import {
 } from "@/lib/owner-chat-prompts";
 import { prisma } from "@/lib/prisma";
 import { getBoss } from "@/queue/image-generation";
+import { createSousChefMessage } from "@/services/anthropic-models";
 
 export const OWNER_WHISPER_FANOUT_JOB = "owner-whisper-fanout";
 export const OWNER_WHISPER_GENERATE_JOB = "owner-whisper-generate";
@@ -405,12 +406,15 @@ async function processGenerateJob(job: GenerateWorkerJob) {
     );
 
     const client = getClient();
-    const response = await client.messages.create({
-      model: env.SOUS_CHEF_MODEL,
+    const response = await createSousChefMessage(client, {
       max_tokens: 400,
       system:
         "You are Sous Chef writing the Owner's Whisper. Output exactly 5 lines in the strict format. No prose, no greeting, no sign-off.",
       messages: [{ role: "user", content: prompt }],
+    }, {
+      route: "owner-whisper",
+      restaurantId,
+      forDate,
     });
 
     const text = response.content

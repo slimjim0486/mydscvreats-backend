@@ -17,6 +17,7 @@ import {
   assertRateLimit,
   getClientIp,
 } from "@/lib/public-request-guards";
+import { createSousChefMessage } from "@/services/anthropic-models";
 import {
   type BustanKbTopic,
   getAllBustanTopics,
@@ -704,12 +705,15 @@ export const chatRoute = new Hono().post("/:restaurantId", async (c) => {
     let finalText = "";
 
     while (iterations <= MAX_TOOL_ITERATIONS) {
-      const response = await getClient().messages.create({
-        model: env.SOUS_CHEF_MODEL,
+      const response = await createSousChefMessage(getClient(), {
         max_tokens: 512,
         system: systemPrompt,
         tools: TOOLS,
         messages,
+      }, {
+        route: "public-chat",
+        restaurantId,
+        iteration: iterations,
       });
       totalInputTokens += response.usage.input_tokens;
       totalOutputTokens += response.usage.output_tokens;
