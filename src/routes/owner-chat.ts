@@ -561,9 +561,9 @@ export const ownerChatRoute = new Hono<{
             controller.enqueue(encoder.encode(sseEvent(event, data)));
           }
 
-          try {
-            let iterations = 0;
+          let iterations = 0;
 
+          try {
             while (iterations <= MAX_TOOL_ITERATIONS) {
               const response = await client.messages.create({
                 model: env.SOUS_CHEF_MODEL,
@@ -641,6 +641,15 @@ export const ownerChatRoute = new Hono<{
           } catch (error) {
             const message =
               error instanceof Error ? error.message : "An error occurred";
+            console.error("[owner-chat] stream failed", {
+              restaurantId,
+              clerkId: auth.clerkId,
+              iterations,
+              totalInputTokens,
+              totalOutputTokens,
+              message,
+              error,
+            });
             emit("error", { message });
           } finally {
             // Persist the user + assistant turn together only when we have an
