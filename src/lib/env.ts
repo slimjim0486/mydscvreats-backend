@@ -111,10 +111,10 @@ const envSchema = z.object({
   GOOGLE_SEARCH_CONSOLE_PROPERTY: z.string().default("sc-domain:getbustan.com"),
   // Sabt Pack — weekly auto-generated 7-post bundle. Owner notification is
   // delivered via Resend email (gated on RESEND_API_KEY + RESEND_FROM_EMAIL)
-  // plus the always-on dashboard banner. No separate Sabt Pack toggle needed.
-  // Per-restaurant weekly USD ceiling. Orchestrator forces menu-photo reuse
-  // beyond this cap so a runaway image-gen pass cannot torch the Pro margin.
-  SABT_PACK_MAX_USD_PER_RESTAURANT_PER_WEEK: z.coerce.number().nonnegative().default(0.3),
+  // plus the always-on dashboard banner. Per-restaurant weekly USD ceiling
+  // is enforced by the entitlements file (sabtPackMaxCostUsdPerWeek per
+  // plan) plus an absolute circuit-breaker hardcoded in the orchestrator;
+  // no env override needed.
 });
 
 export const env = envSchema.parse(process.env);

@@ -142,7 +142,7 @@ const PLAN_ENTITLEMENTS: Record<
     adGenerationsPerProject: 6,
     gscDashboardEnabled: true,
     sabtPackEnabled: true,
-    sabtPackMaxCostUsdPerWeek: 0.3,
+    sabtPackMaxCostUsdPerWeek: 1.0,
   },
   portfolio: {
     menuItemLimit: null,
@@ -184,7 +184,7 @@ const PLAN_ENTITLEMENTS: Record<
     adGenerationsPerProject: 6,
     gscDashboardEnabled: true,
     sabtPackEnabled: true,
-    sabtPackMaxCostUsdPerWeek: 0.3,
+    sabtPackMaxCostUsdPerWeek: 1.0,
   },
 };
 

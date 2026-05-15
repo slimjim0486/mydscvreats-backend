@@ -15,7 +15,6 @@
 
 import type { Prisma } from "@prisma/client";
 import { ApiError } from "@/lib/errors";
-import { env } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
 import { getRestaurantEntitlements } from "@/lib/entitlements";
 import { generateHeroImage } from "@/services/ad-studio-ai/image-gen";
@@ -47,10 +46,12 @@ const MIN_SLOTS_FOR_READY = 5;
 const SLIDESHOW_FRAME_COUNT = 5;
 const SLIDESHOW_FALLBACK_HEADLINE = "This week at our table.";
 
-/** Pessimistic per-image cost estimate. Gemini is $0.04; OpenAI GPT Image 2
- *  is $0.19 (per env.OPENAI_IMAGE_COST_USD default). Use the higher figure
- *  for projection so a fallback path can't blow through the cap. */
-const PER_IMAGE_PROJECTION_USD = 0.2;
+/** Realistic per-image cost estimate. Gemini is $0.04 (the default provider);
+ *  a 25% buffer covers occasional retries. The previous $0.20 figure assumed
+ *  OpenAI fallback on every slot, which was wildly over-pessimistic and made
+ *  the projection trip on slot 1 regardless of the cap. Real OpenAI fallback
+ *  runs are caught by the hard per-slot ceiling check below. */
+const PER_IMAGE_PROJECTION_USD = 0.05;
 
 /** Absolute floor on the per-project cap. Even if entitlements ever set the
  *  cap to something pathological (e.g. $50), this circuit-breaker prevents a
@@ -443,9 +444,7 @@ export async function runSabtPackGeneration(
       shouldNotifyOwner: false,
     };
   }
-  const capUsd =
-    eligibility.entitlements.sabtPackMaxCostUsdPerWeek ??
-    env.SABT_PACK_MAX_USD_PER_RESTAURANT_PER_WEEK;
+  const capUsd = eligibility.entitlements.sabtPackMaxCostUsdPerWeek;
 
   // Idempotency claim. If the row already exists with a "done" status, exit.
   const brand = await loadBrandContext(restaurantId);
