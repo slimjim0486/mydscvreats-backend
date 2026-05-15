@@ -21,6 +21,7 @@ export type BustanKbTopic =
   | "menu_import"
   | "public_page"
   | "whatsapp"
+  | "whatsapp_compliance"
   | "languages"
   | "data_privacy"
   | "refunds"
@@ -82,6 +83,15 @@ export const BUSTAN_KB: Record<BustanKbTopic, BustanKbEntry> = {
       "Bustan offers two levels of WhatsApp. The free click-to-WhatsApp button opens a pre-filled message to the restaurant's number. On Pro and Portfolio, restaurants can connect their real WhatsApp Business Account via Meta's Embedded Signup to use Bustan as their WhatsApp inbox, template manager, and campaign tool. Bustan is the registered Meta Tech Provider; restaurants own their number and can disconnect anytime. WhatsApp messaging fees are billed by Meta directly to the restaurant — Bustan does not mark up.",
     links: ["https://getbustan.com/help#whatsapp"],
   },
+  whatsapp_compliance: {
+    topic: "whatsapp_compliance",
+    summary:
+      "WhatsApp marketing has strict rules and Meta will throttle, demote, or ban numbers that spam. Core rules: (1) Only message customers who explicitly opted in — never scraped lists or POS exports without confirmation. (2) Keep marketing to ≤ 1–2 messages per customer per week; daily marketing gets numbers blocked. (3) After 24 hours of customer silence you can only message via approved templates; freeform text only works inside the 24-hour customer-service window. (4) Categorise templates correctly — Utility for confirmations/updates, Marketing for promos; mis-categorising is a fast way to get an account flagged. (5) Watch your Meta quality rating: Green is healthy, Yellow means pause campaigns immediately, Red means stop sending and let it recover over 7 clean days. Bustan automates: opted-in-only filtering on every campaign, permanent opt-out on STOP keywords, per-(customer, template) frequency cap, daily tier-budget reservation, and correctly-categorised pre-shipped templates. The owner is responsible for getting honest opt-in, choosing reasonable frequency, monitoring quality rating, and warming up new numbers. Full guidance and recovery playbook: getbustan.com/help#whatsapp-compliance and getbustan.com/faq.",
+    links: [
+      "https://getbustan.com/help#whatsapp-compliance",
+      "https://getbustan.com/faq#whatsapp-compliance",
+    ],
+  },
   languages: {
     topic: "languages",
     summary:
@@ -126,6 +136,35 @@ const TOPIC_KEYWORDS: Record<BustanKbTopic, string[]> = {
   menu_import: ["menu import", "upload menu", "import pdf", "extract menu"],
   public_page: ["public page", "this page", "menu page", "restaurant page", "url", "slug", "embed"],
   whatsapp: ["whatsapp", "wa.me", "messaging", "crm", "meta tech provider"],
+  whatsapp_compliance: [
+    "blocked",
+    "banned",
+    "throttled",
+    "quality rating",
+    "quality score",
+    "yellow",
+    "red rating",
+    "messaging tier",
+    "daily limit",
+    "tier limit",
+    "template rejected",
+    "spam",
+    "opt-in",
+    "opt in",
+    "opted in",
+    "consent",
+    "frequency cap",
+    "compliance",
+    "meta rules",
+    "whatsapp policy",
+    "stop sending",
+    "24 hour window",
+    "24-hour window",
+    "customer service window",
+    "warm up",
+    "warmup",
+    "list import",
+  ],
   languages: ["arabic", "english", "language", "translate", "bilingual", "rtl"],
   data_privacy: ["privacy", "data", "gdpr", "pdpl", "delete my data", "data deletion", "tracking", "cookies"],
   refunds: ["refund", "cancel", "cancellation", "money back"],

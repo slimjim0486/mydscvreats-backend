@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { env } from "@/lib/env";
+import { seedReferenceData } from "@/lib/startup-seed";
 import { startMenuImageWorker } from "@/queue/image-generation";
 import { startAdStudioWorker } from "@/queue/ad-studio-jobs";
 import { startWhatsAppRetentionWorker } from "@/queue/whatsapp-retention";
@@ -95,6 +96,14 @@ serve(
     console.log(`Bustan backend listening on http://localhost:${info.port}`);
   }
 );
+
+seedReferenceData()
+  .then(() => {
+    console.log("Reference data (badges + dietary tags) seeded");
+  })
+  .catch((error) => {
+    console.error("Reference data seeding failed", error);
+  });
 
 // Start the pg-boss worker inline so image generation jobs are processed
 startMenuImageWorker()
