@@ -249,6 +249,35 @@ export async function collectGoogleReviewsData(restaurant: RestaurantSeoContext)
   };
 }
 
+/**
+ * Pick 1-2 short, anonymous excerpts from the reviews that triggered this
+ * theme. We strip names/handles, cap at 90 chars, and prefer the shortest
+ * matching sentence so the quote reads cleanly as a pull-quote.
+ */
+function pickThemeQuotes(reviews: string[], terms: string[]): string[] {
+  const matching = reviews.filter((review) =>
+    terms.some((term) => review.toLowerCase().includes(term))
+  );
+
+  const excerpts: string[] = [];
+  for (const review of matching) {
+    // Split into sentences and pick one that contains the keyword.
+    const sentences = review
+      .replace(/\s+/g, " ")
+      .split(/(?<=[.!?])\s+/)
+      .map((sentence) => sentence.trim())
+      .filter((sentence) => sentence.length > 10 && sentence.length <= 120);
+    const matched = sentences.find((sentence) =>
+      terms.some((term) => sentence.toLowerCase().includes(term))
+    );
+    if (matched && !excerpts.includes(matched)) {
+      excerpts.push(matched.length > 90 ? `${matched.slice(0, 87)}…` : matched);
+    }
+    if (excerpts.length >= 2) break;
+  }
+  return excerpts;
+}
+
 function buildReviewThemes(reviews: string[]): ReviewData["themes"] {
   const themeDefinitions = [
     { theme: "Food quality", terms: ["food", "taste", "delicious", "fresh", "flavor"], sentiment: "positive" as const },
@@ -266,6 +295,7 @@ function buildReviewThemes(reviews: string[]): ReviewData["themes"] {
         definition.terms.some((term) => review.includes(term))
       ).length,
       sentiment: definition.sentiment,
+      quotes: pickThemeQuotes(reviews, definition.terms),
     }))
     .filter((entry) => entry.count > 0)
     .sort((a, b) => b.count - a.count)

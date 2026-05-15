@@ -18,9 +18,26 @@ function fallbackSynthesis(
   scorecard: AuditScorecard,
   output: AuditCollectorOutput
 ): AuditSynthesis {
-  const weakest = Object.values(scorecard.pillars).sort((a, b) => a.score - b.score)[0];
+  const assessedPillars = Object.values(scorecard.pillars).filter(
+    (pillar) => pillar.status !== "not_assessed"
+  );
+  const strongest = [...assessedPillars].sort((a, b) => b.score - a.score)[0];
+  const weakest = [...assessedPillars].sort((a, b) => a.score - b.score)[0];
+
+  const strengthLine = strongest
+    ? `${restaurant.name} is performing well on ${strongest.label.toLowerCase()} (${strongest.score}/100).`
+    : `${restaurant.name} has a baseline discovery footprint we measured.`;
+  const opportunityLine = weakest
+    ? ` The biggest unlock is ${weakest.label.toLowerCase()} — improving it would move your overall score the most.`
+    : "";
+  const peerLine = scorecard.peerComparison
+    ? scorecard.peerComparison.diff !== null && scorecard.peerComparison.diff >= 0
+      ? ` You're ${scorecard.peerComparison.diff} points ahead of ${scorecard.peerComparison.cohortLabel}.`
+      : ` You're ${Math.abs(scorecard.peerComparison.diff ?? 0)} points behind ${scorecard.peerComparison.cohortLabel} — closeable in 2-4 weeks.`
+    : "";
+
   return {
-    executiveSummary: `${restaurant.name} scored ${scorecard.overallScore}/100. The clearest improvement area is ${weakest.label.toLowerCase()}: ${weakest.summary}`,
+    executiveSummary: `${strengthLine}${opportunityLine}${peerLine}`.trim(),
     photoCritique:
       output.photoVision?.summary ??
       "Photo quality could not be fully reviewed from the available Google Maps images.",
@@ -56,9 +73,25 @@ export async function synthesizeAudit(input: {
   const response = await client.messages.create({
     model: "claude-sonnet-4-6",
     max_tokens: 2000,
-    system: `You are a MENA restaurant growth strategist. Return only valid JSON.
-Write a specific public-facing audit narrative for a restaurant owner.
-Mention real signals from the data. Avoid generic advice. Be useful for Arabic and English restaurant markets in UAE/MENA.`,
+    system: `You are a Gulf/MENA restaurant growth strategist writing an audit narrative for a restaurant owner.
+Return only valid JSON.
+
+Rules for executiveSummary (3-4 sentences, in this exact order):
+1. Lead with the STRONGEST pillar as a compliment — name it specifically with the score.
+2. Then name the BIGGEST UNLOCK (the lowest-scoring pillar that was actually assessed) and frame it as opportunity, not failure. Use phrasing like "the biggest unlock", "the clearest place to grow", "where the upside lives". Never use "data unavailable", "we couldn't", "degraded", "failed", or apologetic language.
+3. State the single concrete action that would move the score the most, this week.
+4. If peerComparison is present, add ONE clause comparing to peers (e.g., "ahead of Italian restaurants in Dubai Media City" or "5 points behind your cohort").
+
+IMPORTANT — handling not_assessed pillars:
+- Pillars with status="not_assessed" mean we couldn't collect data, NOT that the restaurant is failing.
+- Never describe a not_assessed pillar as the weak spot. Pick the lowest-scoring pillar with status="ok" instead.
+- If a not_assessed pillar is relevant (e.g., no website is linked), mention it as a separate observation, never as the main weakness.
+
+For photoCritique (2-3 sentences): describe the visual quality patterns from the photo data — lighting, food appeal, composition. Be specific.
+
+For peerNarrative (2-3 sentences): if peerComparison is present, compare directly using the cohortLabel and the diff. If only medianRating/medianReviewCount exists, use those. Be honest about cohort size.
+
+Use Gulf/MENA framing where natural ("Gulf restaurants", "your area"). Never say "Dubai restaurants" generically.`,
     messages: [
       {
         role: "user",
@@ -86,9 +119,9 @@ Mention real signals from the data. Avoid generic advice. Be useful for Arabic a
             failures: input.collectorOutput.failures,
           },
           expectedShape: {
-            executiveSummary: "2-4 sentences naming at least one concrete issue",
-            photoCritique: "1-3 sentences about visual quality",
-            peerNarrative: "1-3 sentences comparing to peer data",
+            executiveSummary: "3-4 sentences: strongest pillar (compliment) → biggest unlock (opportunity framing) → concrete action this week → peer comparison line if available",
+            photoCritique: "2-3 sentences naming specific visual quality patterns",
+            peerNarrative: "2-3 sentences using cohortLabel + diff or median data, honest about cohort size",
           },
         }),
       },

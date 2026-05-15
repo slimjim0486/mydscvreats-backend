@@ -61,6 +61,12 @@ export interface ReviewData {
     theme: string;
     count: number;
     sentiment: "positive" | "negative" | "mixed";
+    /**
+     * Short (~80 char) representative excerpts pulled from the actual reviews
+     * that triggered this theme. Used by the audit's Voice of Customer card.
+     * Older cached reports won't have this; frontend should treat as optional.
+     */
+    quotes?: string[];
   }>;
 }
 

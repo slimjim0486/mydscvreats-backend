@@ -74,6 +74,12 @@ export interface PeerBenchmarkData {
   location: string;
   medianRating: number | null;
   medianReviewCount: number | null;
+  /**
+   * Directional 0-100 score for the peer cohort built from rating + review
+   * count. Only populated when the cohort has ≥ 5 peers; otherwise null and
+   * the frontend hides the comparison line.
+   */
+  averagePeerScore: number | null;
   peers: PeerBenchmarkPlace[];
 }
 
@@ -89,13 +95,42 @@ export interface AuditCollectorOutput extends CollectorOutput {
   peerBenchmark: PeerBenchmarkData | null;
 }
 
+export type AuditPillarStatus = "ok" | "not_assessed";
+
 export interface AuditScorecardPillar extends Omit<ScorecardPillar, "key"> {
   key: AuditPillar;
+  /**
+   * "not_assessed" means the collector couldn't return enough data to score
+   * this pillar honestly. Frontend renders these neutrally — no score badge,
+   * not flagged as CRITICAL — and overall-score weighting excludes them.
+   * Older cached reports without this field default to "ok".
+   */
+  status?: AuditPillarStatus;
+}
+
+export interface AuditPeerComparison {
+  /**
+   * Cohort label used in copy ("Italian restaurants in Dubai Media City").
+   * Backend builds this from cuisine + location.
+   */
+  cohortLabel: string;
+  cohortSize: number;
+  /**
+   * Composite directional score for peers, 0-100, derived from peer rating +
+   * review count. Not perfectly comparable to the subject's overallScore, but
+   * good enough for a one-line comparison.
+   */
+  averagePeerScore: number | null;
+  yourScore: number;
+  /** Your overall score minus averagePeerScore (positive = ahead). */
+  diff: number | null;
 }
 
 export interface AuditScorecard {
   overallScore: number;
   pillars: Record<AuditPillar, AuditScorecardPillar>;
+  /** Present when we have ≥ 5 peers to compare against. */
+  peerComparison?: AuditPeerComparison | null;
 }
 
 export interface AuditSynthesis {
