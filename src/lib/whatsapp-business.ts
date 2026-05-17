@@ -680,6 +680,38 @@ export async function createWhatsAppTemplate(input: {
   );
 }
 
+/**
+ * Submit a template to Meta with a pre-built components array. The basic
+ * `createWhatsAppTemplate` above only handles body + body example; this
+ * variant accepts the full payload so callers can include FOOTER and
+ * BUTTONS components (quick-reply and URL buttons for order alerts).
+ *
+ * Use with `buildMetaTemplateComponents()` from whatsapp-order-templates.ts
+ * to render the components array from an OrderTemplateDefinition.
+ */
+export async function createWhatsAppTemplateWithComponents(input: {
+  accessToken: string;
+  wabaId: string;
+  name: string;
+  category: string;
+  language: string;
+  components: Array<Record<string, unknown>>;
+}) {
+  return graphRequest<{ id?: string; status?: string; category?: string }>(
+    `/${input.wabaId}/message_templates`,
+    input.accessToken,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        name: input.name,
+        category: input.category,
+        language: input.language,
+        components: input.components,
+      }),
+    }
+  );
+}
+
 export async function fetchWhatsAppTemplates(input: {
   accessToken: string;
   wabaId: string;

@@ -19,6 +19,7 @@
  *   - L3: today query uses UAE-local midnight (Asia/Dubai = UTC+4).
  */
 
+import { Prisma } from "@prisma/client";
 import { Hono } from "hono";
 import { z } from "zod";
 import { env } from "@/lib/env";
@@ -40,6 +41,16 @@ import {
   getClientIp,
 } from "@/lib/public-request-guards";
 import { normalizeUaePhone } from "@/lib/uae-phone";
+import {
+  createWhatsAppTemplateWithComponents,
+  decryptAccessToken,
+  mapTemplateStatus,
+  validateTemplateBody,
+} from "@/lib/whatsapp-business";
+import {
+  ORDER_TEMPLATE_DEFINITIONS,
+  buildMetaTemplateComponents,
+} from "@/lib/whatsapp-order-templates";
 import { requireAuth } from "@/middleware/auth";
 
 const ORDER_EXPIRY_MINUTES = 15;
@@ -962,6 +973,175 @@ export const ordersAdminRoute = new Hono<{
       });
       if (!result.ok) throw new ApiError(result.reason, 409);
       return c.json({ ok: true, status: result.status });
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  })
+  /* ───────── Order template management ─────────
+   * GET   /api/orders/admin/:restaurantId/templates         current local status of each
+   * POST  /api/orders/admin/:restaurantId/templates/submit  submit the 5 to Meta
+   *
+   * Order templates (UTILITY) are separate from the existing CRM
+   * marketing templates — they need their own submission flow because
+   * `createWhatsAppTemplate` only sends BODY components, while order
+   * templates also need FOOTER + BUTTONS (quick-reply / URL).
+   */
+  .get("/:restaurantId/templates", requireAuth, async (c) => {
+    try {
+      const auth = c.get("auth");
+      enforceAdminRateLimit(auth.clerkId);
+      const restaurantId = c.req.param("restaurantId");
+      await getOwnedRestaurant(restaurantId, auth.clerkId);
+
+      const existing = await prisma.whatsAppTemplate.findMany({
+        where: {
+          restaurantId,
+          name: { in: ORDER_TEMPLATE_DEFINITIONS.map((t) => t.name) },
+        },
+        select: {
+          name: true,
+          status: true,
+          metaTemplateId: true,
+          rejectionReason: true,
+          lastSyncedAt: true,
+          category: true,
+        },
+      });
+      const byName = new Map(existing.map((row) => [row.name, row]));
+
+      return c.json({
+        templates: ORDER_TEMPLATE_DEFINITIONS.map((tpl) => {
+          const row = byName.get(tpl.name);
+          const buttons = (tpl as { buttons?: readonly unknown[] }).buttons;
+          return {
+            name: tpl.name,
+            label: tpl.label,
+            category: tpl.category,
+            language: tpl.language,
+            preview: tpl.body,
+            buttonCount: buttons?.length ?? 0,
+            // null = never submitted; 'pending'/'approved'/'rejected' = Meta state
+            status: row?.status ?? null,
+            metaTemplateId: row?.metaTemplateId ?? null,
+            rejectionReason: row?.rejectionReason ?? null,
+            lastSyncedAt: row?.lastSyncedAt ?? null,
+          };
+        }),
+      });
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  })
+  .post("/:restaurantId/templates/submit", requireAuth, async (c) => {
+    try {
+      const auth = c.get("auth");
+      enforceAdminRateLimit(auth.clerkId);
+      const restaurantId = c.req.param("restaurantId");
+      await getOwnedRestaurant(restaurantId, auth.clerkId);
+
+      const integration = await prisma.whatsAppIntegration.findFirst({
+        where: { restaurantId, status: "connected" },
+      });
+      if (!integration?.wabaId) {
+        throw new ApiError(
+          "Connect a WhatsApp Business account before submitting order templates.",
+          400
+        );
+      }
+      const accessToken = decryptAccessToken(integration.accessTokenCipher);
+
+      const submittedAt = new Date();
+      const results: Array<{
+        name: string;
+        ok: boolean;
+        status?: string;
+        metaTemplateId?: string;
+        error?: string;
+      }> = [];
+
+      for (const tpl of ORDER_TEMPLATE_DEFINITIONS) {
+        const validation = validateTemplateBody({
+          body: tpl.body,
+          category: tpl.category,
+          variables: tpl.variables,
+        });
+        if (!validation.ok) {
+          results.push({ name: tpl.name, ok: false, error: validation.reason });
+          continue;
+        }
+
+        try {
+          const components = buildMetaTemplateComponents(tpl);
+          const response = await createWhatsAppTemplateWithComponents({
+            accessToken,
+            wabaId: integration.wabaId,
+            name: tpl.name,
+            category: tpl.category,
+            language: tpl.language,
+            components,
+          });
+
+          const localStatus = mapTemplateStatus(response.status) === "draft"
+            ? "pending"
+            : mapTemplateStatus(response.status);
+
+          await prisma.whatsAppTemplate.upsert({
+            where: {
+              restaurantId_name_language: {
+                restaurantId,
+                name: tpl.name,
+                language: tpl.language,
+              },
+            },
+            create: {
+              restaurantId,
+              integrationId: integration.id,
+              name: tpl.name,
+              label: tpl.label,
+              category: response.category ?? tpl.category,
+              language: tpl.language,
+              status: localStatus,
+              body: tpl.body,
+              variables: tpl.variables as unknown as Prisma.InputJsonValue,
+              metaTemplateId: response.id ?? null,
+              lastSyncedAt: submittedAt,
+            },
+            update: {
+              integrationId: integration.id,
+              category: response.category ?? tpl.category,
+              status: localStatus,
+              body: tpl.body,
+              variables: tpl.variables as unknown as Prisma.InputJsonValue,
+              metaTemplateId: response.id ?? undefined,
+              rejectionReason: null,
+              lastSyncedAt: submittedAt,
+            },
+          });
+
+          results.push({
+            name: tpl.name,
+            ok: true,
+            status: localStatus,
+            metaTemplateId: response.id,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          // Meta returns 400 with "name already exists" if you re-submit
+          // an already-submitted template — treat as success, just refresh
+          // our local record.
+          if (/already exists|duplicate/i.test(message)) {
+            results.push({ name: tpl.name, ok: true, status: "pending" });
+            continue;
+          }
+          results.push({ name: tpl.name, ok: false, error: message });
+        }
+      }
+
+      return c.json({
+        results,
+        submitted: results.filter((r) => r.ok).length,
+        failed: results.filter((r) => !r.ok).length,
+      });
     } catch (error) {
       return errorResponse(c, error);
     }
