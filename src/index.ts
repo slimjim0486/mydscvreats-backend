@@ -2,12 +2,20 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
+
+// H10: global BigInt JSON serialization. Without this, any future endpoint
+// that returns OrderIntent.paymentAmountMinor will throw `TypeError: Do not
+// know how to serialize a BigInt`. Latent prod-500 — fix it once globally.
+(BigInt.prototype as unknown as { toJSON: () => string }).toJSON = function () {
+  return this.toString();
+};
 import { env } from "@/lib/env";
 import { initSentry } from "@/lib/sentry";
 import { seedReferenceData } from "@/lib/startup-seed";
 import { startMenuImageWorker } from "@/queue/image-generation";
 import { startAdStudioWorker } from "@/queue/ad-studio-jobs";
 import { startWhatsAppRetentionWorker } from "@/queue/whatsapp-retention";
+import { startOrderIntentExpiryWorker } from "@/queue/order-intent-expiry";
 import { startOwnerChatMemoryWorker } from "@/queue/owner-chat-memory";
 import { startOwnerWhisperWorker } from "@/queue/owner-whisper";
 import { startGscSyncWorker } from "@/queue/gsc-sync";
@@ -39,6 +47,7 @@ import { ownerChatRoute } from "@/routes/owner-chat";
 import { menuPrintRoute, pdfExportRoute } from "@/routes/pdf-export";
 import { whatsappRoute } from "@/routes/whatsapp";
 import { whatsappWebhooksRoute } from "@/routes/whatsapp-webhooks";
+import { ordersRoute, ordersAdminRoute } from "@/routes/orders";
 import { metaDataDeletionRoute } from "@/routes/meta-data-deletion";
 import { clerkWebhooksRoute } from "@/routes/clerk-webhooks";
 
@@ -77,6 +86,8 @@ app.route("/api/analytics", analyticsRoute);
 app.route("/api/audit", auditRoute);
 app.route("/api/upload", uploadRoute);
 app.route("/api/whatsapp", whatsappRoute);
+app.route("/api/orders", ordersRoute);
+app.route("/api/orders/admin", ordersAdminRoute);
 app.route("/api/webhooks", whatsappWebhooksRoute);
 app.route("/api/webhooks", metaDataDeletionRoute);
 app.route("/api/webhooks/clerk", clerkWebhooksRoute);
@@ -131,6 +142,14 @@ startWhatsAppRetentionWorker()
   })
   .catch((error) => {
     console.error("pg-boss whatsapp-retention worker failed to start", error);
+  });
+
+startOrderIntentExpiryWorker()
+  .then(() => {
+    console.log("pg-boss order-intent-expiry worker started");
+  })
+  .catch((error) => {
+    console.error("pg-boss order-intent-expiry worker failed to start", error);
   });
 
 startOwnerChatMemoryWorker()

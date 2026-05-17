@@ -60,6 +60,16 @@ const envSchema = z.object({
   CLERK_WEBHOOK_SECRET: optionalString(z.string().min(20)),
   STRIPE_SECRET_KEY: optionalString(),
   STRIPE_WEBHOOK_SECRET: optionalString(),
+  // Telr — payment provider for WhatsApp Ordering v1. UAE-licensed,
+  // supports AED + Apple Pay + Google Pay + cards out of the box. Each
+  // restaurant connects their own Telr merchant account; we use a single
+  // platform store id ONLY for COD-only restaurants that don't need
+  // payment links. Webhook secret is shared across all restaurants since
+  // Telr's IPN doesn't include a per-merchant signing scheme.
+  TELR_STORE_ID: optionalString(),
+  TELR_AUTH_KEY: optionalString(),
+  TELR_MODE: z.enum(["test", "live"]).default("test"),
+  TELR_WEBHOOK_SECRET: optionalString(z.string().min(16)),
   BACKEND_WEBHOOK_SYNC_SECRET: optionalString(z.string().min(32)),
   WHATSAPP_WEBHOOK_VERIFY_TOKEN: optionalString(z.string().min(16)),
   WHATSAPP_TOKEN_ENCRYPTION_KEY: optionalString(z.string().min(32)),

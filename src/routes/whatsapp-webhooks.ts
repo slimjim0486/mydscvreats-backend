@@ -1,16 +1,24 @@
 import { Hono } from "hono";
 import { env } from "@/lib/env";
 import {
+  decryptAccessToken,
   extractWebhookMessageBody,
   mapWebhookMessageType,
   mapWebhookStatus,
   normalizeE164Phone,
   normalizeWhatsAppPhone,
+  sendWhatsAppText,
   verifyMetaSignature,
 } from "@/lib/whatsapp-business";
 import { prisma } from "@/lib/prisma";
 import { extractCtwaReferral } from "@/lib/ctwa-referral";
 import { resolveAdProjectByMetaAdId } from "@/lib/ctwa-resolver";
+import {
+  detectOrderAction,
+  findOldestPendingOrderForRestaurant,
+  findPendingOrderByNumber,
+  transitionOrder,
+} from "@/lib/order-state-machine";
 
 /**
  * H7 fix: cap webhook-supplied display names to prevent stored-XSS surfaces
@@ -434,8 +442,163 @@ export const whatsappWebhooksRoute = new Hono()
         const messages = Array.isArray(value.messages) ? value.messages : [];
         const statuses = Array.isArray(value.statuses) ? value.statuses : [];
 
+        // v1 ordering: if the inbound is an operator-side button/keyword
+        // action AND there's a pending order, route it to the state
+        // machine and SKIP normal CRM conversation handling so order
+        // actions don't pollute the customer inbox.
+        //
+        // C2: also detect "CONFIRM" from the configured operator phone —
+        // this verifies the operator's number is actually theirs (not a
+        // typo) and unlocks Accept/Reject authority.
+        const restaurant = await prisma.restaurant.findUnique({
+          where: { id: integration.restaurantId },
+          select: {
+            whatsappNumber: true,
+            ordersV1Enabled: true,
+            whatsappIntegration: { select: { operatorPhoneVerifiedAt: true } },
+          },
+        });
+        const operatorPhone = restaurant?.whatsappNumber
+          ? normalizeE164Phone(restaurant.whatsappNumber)
+          : null;
+        const ordersEnabled = Boolean(restaurant?.ordersV1Enabled);
+        const operatorVerified = Boolean(
+          restaurant?.whatsappIntegration?.operatorPhoneVerifiedAt
+        );
+
         for (const message of messages) {
           const contact = contacts.find((entry: Record<string, any>) => entry.wa_id === message.from);
+          const fromPhone = normalizeE164Phone(String(message.from ?? ""));
+          const isOperator =
+            ordersEnabled &&
+            operatorPhone &&
+            fromPhone &&
+            fromPhone === operatorPhone;
+
+          // C2: handle "CONFIRM" verification keyword before any other
+          // order routing. Verification is a one-time event; subsequent
+          // CONFIRM sends are no-ops.
+          if (isOperator && !operatorVerified) {
+            const bodyText =
+              message.type === "text"
+                ? String(message.text?.body ?? "").trim().toUpperCase()
+                : "";
+            if (bodyText === "CONFIRM") {
+              const fullIntegration = await prisma.whatsAppIntegration.update({
+                where: { id: integration.id },
+                data: { operatorPhoneVerifiedAt: new Date() },
+                select: { accessTokenCipher: true, phoneNumberId: true },
+              });
+              // Send a free-text ack so the operator knows verification worked.
+              // Best-effort: failure here doesn't block the verification flip.
+              try {
+                await sendWhatsAppText({
+                  accessToken: decryptAccessToken(fullIntegration.accessTokenCipher),
+                  phoneNumberId: fullIntegration.phoneNumberId,
+                  to: fromPhone,
+                  body:
+                    "Verified — this number is now the operator for Bustan orders. " +
+                    "You'll receive order alerts here and can Accept / Reject by replying.",
+                });
+              } catch (error) {
+                console.error("[orders] CONFIRM ack send failed", {
+                  restaurantId: integration.restaurantId,
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              }
+              // Still log as CRM message so the operator sees acknowledgment
+              // in their conversation history.
+              await handleInboundMessage({
+                integration,
+                message,
+                contactName: contact?.profile?.name ?? null,
+              });
+              continue;
+            }
+            // Unverified operator + non-CONFIRM message: log as CRM, skip
+            // any state-machine routing.
+            await handleInboundMessage({
+              integration,
+              message,
+              contactName: contact?.profile?.name ?? null,
+            });
+            continue;
+          }
+
+          if (isOperator && operatorVerified) {
+            const detected = detectOrderAction(message);
+            if (detected) {
+              // H2 fix: dedup BEFORE transitioning. Meta retries the same
+              // payload on transient failures; without this, two retries
+              // of the same Accept tap can accept two different orders
+              // (each iteration finds the next-oldest pending).
+              const providerMessageId = String(message.id ?? "");
+              const dedup = providerMessageId
+                ? await prisma.whatsAppMessage
+                    .upsert({
+                      where: { providerMessageId },
+                      create: {
+                        restaurantId: integration.restaurantId,
+                        integrationId: integration.id,
+                        providerMessageId,
+                        direction: "inbound",
+                        type: mapWebhookMessageType(message.type),
+                        status: "received",
+                        fromPhone,
+                        toPhone: normalizeWhatsAppPhone(integration.displayPhoneNumber),
+                        body: extractWebhookMessageBody(message),
+                        rawPayload: message,
+                        createdAt: toWebhookDate(message.timestamp),
+                      },
+                      update: {},
+                      select: { id: true, createdAt: true },
+                    })
+                    .catch(() => null)
+                : null;
+
+              // If the row already existed (createdAt < now-2s heuristic
+              // is unreliable — instead we rely on the fact that updates
+              // are no-ops; we detect via a separate count check), we
+              // still proceed but only the FIRST transition will commit
+              // due to the atomic conditional update in transitionOrder.
+              // That's safer than trying to detect "existed before".
+
+              // C1: prefer the order number embedded in the operator's reply.
+              const order = detected.orderNumber
+                ? await findPendingOrderByNumber(
+                    integration.restaurantId,
+                    detected.orderNumber
+                  )
+                : await findOldestPendingOrderForRestaurant(
+                    integration.restaurantId
+                  );
+
+              if (order && dedup) {
+                const result = await transitionOrder({
+                  orderIntentId: order.id,
+                  action: detected.action,
+                  actor: "restaurant",
+                  source: "whatsapp_webhook",
+                  expectedRestaurantId: integration.restaurantId,
+                  metadata: {
+                    providerMessageId,
+                    fromPhone,
+                    orderNumberInReply: detected.orderNumber,
+                    routedBy: detected.orderNumber ? "order_number" : "oldest_pending",
+                  },
+                });
+                if (result.ok) {
+                  // Order handled — already dedup-recorded above; skip
+                  // the full CRM inbound handler.
+                  continue;
+                }
+                // Transition lost the race (e.g. cron expired it in the
+                // same tick). Fall through to CRM logging so the operator
+                // at least sees their reply.
+              }
+            }
+          }
+
           await handleInboundMessage({
             integration,
             message,

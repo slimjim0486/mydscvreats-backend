@@ -11,6 +11,7 @@ import {
   getClientIp,
 } from "@/lib/public-request-guards";
 import { normalizeE164Phone } from "@/lib/whatsapp-business";
+import { generateOrderNumber } from "@/lib/order-numbers";
 
 const redirectQuerySchema = z.object({
   source: z
@@ -466,16 +467,22 @@ export const whatsappRoute = new Hono()
 
             customerId = customer.id;
 
-            await tx.customerConsent.create({
-              data: {
-                restaurantId: restaurant.id,
-                customerId: customer.id,
-                status: payload.customer.marketingConsent ? "opt_in" : "opt_out",
-                source: "public_checkout",
-                ipAddress: clientIp,
-                userAgent: c.req.header("user-agent") ?? null,
-              },
-            });
+            // M5 (back-port from orders.ts): only persist a consent row on
+            // explicit opt-in. A first-time customer leaving the checkbox
+            // unticked is "never asked" — recording opt_out poisons the
+            // audit trail and blocks legitimate future re-opt-in.
+            if (payload.customer.marketingConsent) {
+              await tx.customerConsent.create({
+                data: {
+                  restaurantId: restaurant.id,
+                  customerId: customer.id,
+                  status: "opt_in",
+                  source: "public_checkout",
+                  ipAddress: clientIp,
+                  userAgent: c.req.header("user-agent") ?? null,
+                },
+              });
+            }
           }
 
           const click = await tx.whatsAppClick.create({
@@ -507,11 +514,16 @@ export const whatsappRoute = new Hono()
           });
 
           if (payload.customer) {
+            // Legacy click-to-WhatsApp orders bypass the v1 state machine:
+            // status `completed` so they don't show in the new dashboards
+            // or get touched by the expiry cron.
             await tx.orderIntent.create({
               data: {
                 restaurantId: restaurant.id,
                 customerId,
                 clickId: click.id,
+                orderNumber: generateOrderNumber(),
+                status: "completed",
                 fulfillmentMethod: payload.customer.fulfillmentMethod,
                 customerName: payload.customer.name,
                 phoneNumber: payload.customer.phoneNumber,

@@ -29,9 +29,17 @@ function normalizeOrigin(value: string | null) {
 }
 
 function getAllowedOrigins() {
+  // M3: read additional origins from env so Cloudflare Pages preview URLs
+  // (and any future white-label domains) can be added without code edits.
+  // Comma-separated. Always includes FRONTEND_APP_URL + the canonical
+  // production domain.
+  const extras = (process.env.PUBLIC_ALLOWED_ORIGINS ?? "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter((origin) => origin.length > 0);
   return new Set(
-    [env.FRONTEND_APP_URL, "https://getbustan.com", "https://getbustan.com"].map((origin) =>
-      origin.replace(/\/$/, "")
+    [env.FRONTEND_APP_URL, "https://getbustan.com", "https://www.getbustan.com", ...extras].map(
+      (origin) => origin.replace(/\/$/, "")
     )
   );
 }

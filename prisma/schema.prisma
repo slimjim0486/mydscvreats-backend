@@ -159,11 +159,40 @@ enum CustomerConsentStatus {
 enum OrderFulfillmentMethod {
   delivery
   pickup
+  dine_in
 }
 
 enum OrderIntentStatus {
-  sent_to_whatsapp
-  opened_whatsapp
+  draft
+  pending
+  accepted
+  preparing
+  ready
+  completed
+  rejected
+  cancelled
+  expired
+}
+
+enum PaymentProvider {
+  telr
+  stripe
+  cod
+}
+
+enum PaymentStatus {
+  unpaid
+  pending
+  paid
+  failed
+  refunded
+}
+
+enum OrderIntentEventActor {
+  customer
+  restaurant
+  system
+  webhook
 }
 
 enum CampaignType {
@@ -279,6 +308,7 @@ model Restaurant {
   subscriptionStatus SubscriptionStatus @default(trial) @map("subscription_status")
   trialEndsAt        DateTime?          @map("trial_ends_at")
   sabtPackEnabled    Boolean            @default(true) @map("sabt_pack_enabled")
+  ordersV1Enabled    Boolean            @default(false) @map("orders_v1_enabled")
   ownerId            String             @map("owner_user_id")
   operatorAccountId  String?            @map("operator_account_id")
   createdAt          DateTime           @default(now()) @map("created_at")
@@ -710,31 +740,81 @@ model CustomerConsent {
 }
 
 model OrderIntent {
-  id                String                 @id @default(cuid())
-  restaurantId      String                 @map("restaurant_id")
-  customerId        String?                @map("customer_id")
-  clickId           String?                @unique @map("click_id")
-  status            OrderIntentStatus      @default(sent_to_whatsapp)
-  fulfillmentMethod OrderFulfillmentMethod @map("fulfillment_method")
-  customerName      String                 @map("customer_name")
-  phoneNumber       String                 @map("phone_number")
-  address           String?
-  notes             String?
-  totalPrice        Decimal                @map("total_price") @db.Decimal(10, 2)
-  currency          String                 @default("AED")
-  itemCount         Int                    @map("item_count")
-  sourcePath        String?                @map("source_path")
-  campaign          String?
-  createdAt         DateTime               @default(now()) @map("created_at")
+  id                          String                 @id @default(cuid())
+  restaurantId                String                 @map("restaurant_id")
+  customerId                  String?                @map("customer_id")
+  clickId                     String?                @unique @map("click_id")
+  orderNumber                 String                 @unique @map("order_number")
+  /// H3: persisted E.164 ("+9715…") — single source of truth for WhatsApp
+  /// sends. We never re-normalize at use time so a follow-up cron/webhook
+  /// never targets a different number than the original receipt.
+  normalizedPhone             String?                @map("normalized_phone")
+  /// H8: HMAC-derived URL token gating the public status page. Legacy rows
+  /// (status=completed) have null; new rows always populate it.
+  urlToken                    String?                @map("url_token")
+  status                      OrderIntentStatus      @default(pending)
+  fulfillmentMethod           OrderFulfillmentMethod @map("fulfillment_method")
+  customerName                String                 @map("customer_name")
+  phoneNumber                 String                 @map("phone_number")
+  address                     String?
+  notes                       String?
+  totalPrice                  Decimal                @map("total_price") @db.Decimal(10, 2)
+  currency                    String                 @default("AED")
+  itemCount                   Int                    @map("item_count")
+  sourcePath                  String?                @map("source_path")
+  campaign                    String?
+  estimatedPrepMinutes        Int?                   @map("estimated_prep_minutes")
+  expiresAt                   DateTime?              @map("expires_at")
+  acceptedAt                  DateTime?              @map("accepted_at")
+  readyAt                     DateTime?              @map("ready_at")
+  completedAt                 DateTime?              @map("completed_at")
+  rejectedAt                  DateTime?              @map("rejected_at")
+  rejectionReason             String?                @map("rejection_reason")
+  paymentProvider             PaymentProvider?       @map("payment_provider")
+  paymentStatus               PaymentStatus          @default(unpaid) @map("payment_status")
+  paymentSessionId            String?                @map("payment_session_id")
+  paymentUrl                  String?                @map("payment_url")
+  paidAt                      DateTime?              @map("paid_at")
+  paymentAmountMinor          BigInt?                @map("payment_amount_minor")
+  restaurantWhatsappMessageId String?                @map("restaurant_whatsapp_message_id")
+  customerWhatsappMessageId   String?                @map("customer_whatsapp_message_id")
+  createdAt                   DateTime               @default(now()) @map("created_at")
 
-  restaurant Restaurant        @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  customer   Customer?         @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  click      WhatsAppClick?    @relation(fields: [clickId], references: [id], onDelete: SetNull)
-  items      OrderIntentItem[]
+  restaurant                Restaurant         @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  customer                  Customer?          @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  click                     WhatsAppClick?     @relation(fields: [clickId], references: [id], onDelete: SetNull)
+  items                     OrderIntentItem[]
+  events                    OrderIntentEvent[]
+  restaurantWhatsappMessage WhatsAppMessage?   @relation("OrderIntentRestaurantMessage", fields: [restaurantWhatsappMessageId], references: [id], onDelete: SetNull)
+  customerWhatsappMessage   WhatsAppMessage?   @relation("OrderIntentCustomerMessage", fields: [customerWhatsappMessageId], references: [id], onDelete: SetNull)
 
   @@index([restaurantId, createdAt])
   @@index([customerId, createdAt])
+  @@index([restaurantId, status, createdAt])
+  @@index([status, expiresAt])
+  @@index([restaurantId, normalizedPhone, status])
+  // H7: composite partial unique — paymentSessionId is only unique WITHIN a
+  // restaurant. Declared via raw SQL in the migration (Prisma can't express
+  // partial unique WHERE clauses); listed here as a regular index so
+  // `prisma migrate dev` doesn't see drift.
+  @@index([restaurantId, paymentSessionId])
   @@map("order_intents")
+}
+
+model OrderIntentEvent {
+  id            String                @id @default(cuid())
+  orderIntentId String                @map("order_intent_id")
+  fromStatus    OrderIntentStatus?    @map("from_status")
+  toStatus      OrderIntentStatus     @map("to_status")
+  actor         OrderIntentEventActor
+  source        String?
+  metadata      Json?
+  createdAt     DateTime              @default(now()) @map("created_at")
+
+  orderIntent OrderIntent @relation(fields: [orderIntentId], references: [id], onDelete: Cascade)
+
+  @@index([orderIntentId, createdAt])
+  @@map("order_intent_events")
 }
 
 model OrderIntentItem {
@@ -826,6 +906,11 @@ model WhatsAppIntegration {
   connectedAt        DateTime?                 @map("connected_at")
   lastWebhookAt      DateTime?                 @map("last_webhook_at")
   lastTemplateSyncAt DateTime?                 @map("last_template_sync_at")
+  /// C2: stamped when the webhook receives an explicit "CONFIRM" message
+  /// from restaurant.whatsappNumber. Until non-null, the order webhook
+  /// router ignores Accept/Reject button-taps from that number — defends
+  /// against a stranger whose phone an owner mistyped acting as operator.
+  operatorPhoneVerifiedAt DateTime?            @map("operator_phone_verified_at")
   lastError          String?                   @map("last_error") @db.Text
   createdAt          DateTime                  @default(now()) @map("created_at")
   updatedAt          DateTime                  @updatedAt @map("updated_at")
@@ -913,12 +998,14 @@ model WhatsAppMessage {
   failedAt          DateTime?                @map("failed_at")
   createdAt         DateTime                 @default(now()) @map("created_at")
 
-  restaurant   Restaurant                   @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  integration  WhatsAppIntegration?         @relation(fields: [integrationId], references: [id], onDelete: SetNull)
-  conversation WhatsAppConversation?        @relation(fields: [conversationId], references: [id], onDelete: SetNull)
-  customer     Customer?                    @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  messageLog   MessageLog?                  @relation(fields: [messageLogId], references: [id], onDelete: SetNull)
-  statusEvents WhatsAppMessageStatusEvent[]
+  restaurant                  Restaurant                   @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  integration                 WhatsAppIntegration?         @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+  conversation                WhatsAppConversation?        @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  customer                    Customer?                    @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  messageLog                  MessageLog?                  @relation(fields: [messageLogId], references: [id], onDelete: SetNull)
+  statusEvents                WhatsAppMessageStatusEvent[]
+  orderIntentRestaurantAlerts OrderIntent[]                @relation("OrderIntentRestaurantMessage")
+  orderIntentCustomerReceipts OrderIntent[]                @relation("OrderIntentCustomerMessage")
 
   @@index([restaurantId, createdAt])
   @@index([conversationId, createdAt])
