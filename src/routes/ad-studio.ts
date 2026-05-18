@@ -521,7 +521,7 @@ const PENDING_STATE_TTL_MIN = 10;
 
 function buildMetaCallbackUri(): string {
   // Backend serves callback; frontend redirects there after OAuth.
-  // FRONTEND_APP_URL is the public origin (e.g. https://app.getbustan.com).
+  // FRONTEND_APP_URL is the public origin (e.g. https://getbustan.com).
   return `${env.FRONTEND_APP_URL.replace(/\/$/, "")}/dashboard/ad-studio/integrations/meta/callback`;
 }
 

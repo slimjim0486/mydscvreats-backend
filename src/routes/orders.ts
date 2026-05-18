@@ -709,6 +709,85 @@ async function getOwnedRestaurant(restaurantId: string, clerkId: string) {
   return restaurant;
 }
 
+/**
+ * Self-service eligibility check. Returns the prerequisites for enabling
+ * direct ordering + whether all are met. Used by both the GET endpoint
+ * (to render the "Get started" card) and the POST /enable endpoint (to
+ * block enablement until everything is in place).
+ *
+ * Prerequisites:
+ *   1. WhatsApp Business integration connected
+ *   2. restaurant.whatsappNumber set (operator's personal WA)
+ *   3. All 5 order templates approved by Meta
+ */
+async function getOrdersV1Eligibility(restaurantId: string) {
+  const [restaurant, templates] = await Promise.all([
+    prisma.restaurant.findUnique({
+      where: { id: restaurantId },
+      select: {
+        whatsappNumber: true,
+        ordersV1Enabled: true,
+        whatsappIntegration: {
+          select: { status: true, displayPhoneNumber: true },
+        },
+      },
+    }),
+    prisma.whatsAppTemplate.findMany({
+      where: {
+        restaurantId,
+        name: { in: ORDER_TEMPLATE_DEFINITIONS.map((t) => t.name) },
+      },
+      select: { name: true, status: true },
+    }),
+  ]);
+
+  const integrationConnected =
+    restaurant?.whatsappIntegration?.status === "connected";
+  const hasWhatsappNumber = Boolean(restaurant?.whatsappNumber);
+  const approvedNames = new Set(
+    templates.filter((t) => t.status === "approved").map((t) => t.name)
+  );
+  const allTemplatesApproved = ORDER_TEMPLATE_DEFINITIONS.every((tpl) =>
+    approvedNames.has(tpl.name)
+  );
+  const approvedCount = ORDER_TEMPLATE_DEFINITIONS.filter((tpl) =>
+    approvedNames.has(tpl.name)
+  ).length;
+
+  const blockers = [
+    {
+      key: "whatsapp_connected" as const,
+      label: "WhatsApp Business account connected",
+      met: integrationConnected,
+      hint: integrationConnected
+        ? null
+        : "Connect via Dashboard → WhatsApp CRM → Connect WhatsApp.",
+    },
+    {
+      key: "whatsapp_number" as const,
+      label: "Operator WhatsApp number set",
+      met: hasWhatsappNumber,
+      hint: hasWhatsappNumber
+        ? null
+        : "Set under Dashboard → Storefront → WhatsApp number (the number you'll use to manage orders).",
+    },
+    {
+      key: "templates_approved" as const,
+      label: `All 5 order templates approved by Meta (${approvedCount}/5)`,
+      met: allTemplatesApproved,
+      hint: allTemplatesApproved
+        ? null
+        : "Submit templates above and wait for Meta approval (usually 24–48h).",
+    },
+  ];
+
+  return {
+    ordersV1Enabled: restaurant?.ordersV1Enabled ?? false,
+    canEnable: blockers.every((b) => b.met),
+    blockers,
+  };
+}
+
 async function getOwnedOrder(orderNumber: string, restaurantId: string) {
   const order = await prisma.orderIntent.findUnique({
     where: { orderNumber },
@@ -743,13 +822,16 @@ export const ordersAdminRoute = new Hono<{
 
       // Surface verification status + the WABA number the operator must
       // message — the dashboard banner needs both to give clear instructions.
-      const integrationStatus = await prisma.whatsAppIntegration.findUnique({
-        where: { restaurantId },
-        select: {
-          operatorPhoneVerifiedAt: true,
-          displayPhoneNumber: true,
-        },
-      });
+      const [integrationStatus, eligibility] = await Promise.all([
+        prisma.whatsAppIntegration.findUnique({
+          where: { restaurantId },
+          select: {
+            operatorPhoneVerifiedAt: true,
+            displayPhoneNumber: true,
+          },
+        }),
+        getOrdersV1Eligibility(restaurantId),
+      ]);
 
       // L3: rolling "today" boundary at UAE-local midnight (UTC+04:00).
       // Server runs UTC; without this, the Today section rolls over at
@@ -886,6 +968,7 @@ export const ordersAdminRoute = new Hono<{
           verifiedAt: integrationStatus?.operatorPhoneVerifiedAt ?? null,
           wabaDisplayNumber: integrationStatus?.displayPhoneNumber ?? null,
         },
+        eligibility,
       });
     } catch (error) {
       return errorResponse(c, error);
@@ -1028,6 +1111,55 @@ export const ordersAdminRoute = new Hono<{
           };
         }),
       });
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  })
+  /* Self-service enable / disable. Mirrors the CLI script
+   * (scripts/enable-orders-v1.ts) but available to the restaurant owner
+   * from /dashboard/orders. Enable refuses unless all eligibility blockers
+   * are met. Disable always succeeds (kill switch for when something goes
+   * wrong during a pilot). */
+  .post("/:restaurantId/enable", requireAuth, async (c) => {
+    try {
+      const auth = c.get("auth");
+      enforceAdminRateLimit(auth.clerkId);
+      const restaurantId = c.req.param("restaurantId");
+      await getOwnedRestaurant(restaurantId, auth.clerkId);
+
+      const eligibility = await getOrdersV1Eligibility(restaurantId);
+      if (!eligibility.canEnable) {
+        const unmet = eligibility.blockers.filter((b) => !b.met).map((b) => b.label);
+        throw new ApiError(
+          `Cannot enable yet: ${unmet.join("; ")}`,
+          400,
+          { code: "eligibility_unmet", blockers: eligibility.blockers }
+        );
+      }
+
+      await prisma.restaurant.update({
+        where: { id: restaurantId },
+        data: { ordersV1Enabled: true },
+      });
+
+      return c.json({ ok: true, ordersV1Enabled: true });
+    } catch (error) {
+      return errorResponse(c, error);
+    }
+  })
+  .post("/:restaurantId/disable", requireAuth, async (c) => {
+    try {
+      const auth = c.get("auth");
+      enforceAdminRateLimit(auth.clerkId);
+      const restaurantId = c.req.param("restaurantId");
+      await getOwnedRestaurant(restaurantId, auth.clerkId);
+
+      await prisma.restaurant.update({
+        where: { id: restaurantId },
+        data: { ordersV1Enabled: false },
+      });
+
+      return c.json({ ok: true, ordersV1Enabled: false });
     } catch (error) {
       return errorResponse(c, error);
     }
